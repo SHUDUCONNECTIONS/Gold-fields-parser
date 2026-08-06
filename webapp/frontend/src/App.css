@@ -186,6 +186,81 @@
   white-space: nowrap;
 }
 
+/* ---------- Schedule settings ---------- */
+
+.schedule {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.schedule-label {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.schedule-hint {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.schedule-days {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.day-chip {
+  border: 1.5px solid var(--panel-border);
+  background: var(--queued-bg);
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.day-chip:hover {
+  border-color: var(--accent-2);
+}
+
+.day-chip-on {
+  background: var(--accent-grad);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.schedule-hours {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.schedule-hours input {
+  width: 64px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1.5px solid var(--panel-border);
+  background: var(--queued-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.schedule-hours input:focus {
+  outline: none;
+  border-color: var(--accent-2);
+}
+
 /* ---------- Toolbar ---------- */
 
 .toolbar {

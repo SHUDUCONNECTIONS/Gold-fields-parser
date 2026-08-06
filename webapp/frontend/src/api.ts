@@ -3,9 +3,14 @@ import type { ParseResult } from "./types";
 
 const API_BASE = "/api";
 
-export async function parseFile(file: File): Promise<ParseResult> {
+export async function parseFile(
+  file: File,
+  schedule: { workDays: string[]; hoursPerDay: number }
+): Promise<ParseResult> {
   const form = new FormData();
   form.append("file", file);
+  form.append("work_days", schedule.workDays.join(","));
+  form.append("hours_per_day", String(schedule.hoursPerDay));
 
   const password = getStoredPassword();
   const res = await fetch(`${API_BASE}/parse`, {

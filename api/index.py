@@ -21,7 +21,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile
+from fastapi import FastAPI, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -80,11 +80,20 @@ class ParseResult(BaseModel):
 
 
 @app.post("/api/parse", response_model=ParseResult)
-async def parse_pdf(file: UploadFile, authorization: str | None = Header(default=None)):
+async def parse_pdf(
+    file: UploadFile,
+    authorization: str | None = Header(default=None),
+    work_days: str = Form(default="mon,tue,wed,thu,fri"),
+    hours_per_day: float = Form(default=parser.DEFAULT_HOURS_PER_DAY),
+):
     require_password(authorization)
 
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only .pdf files are supported")
+    try:
+        parsed_work_days = parser.parse_work_days(work_days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     job_dir = Path(tempfile.mkdtemp(prefix=f"clocking_{uuid.uuid4().hex}_"))
     in_path = job_dir / file.filename
@@ -104,9 +113,13 @@ async def parse_pdf(file: UploadFile, authorization: str | None = Header(default
         df = parser.build_dataframe(records)
         full_daily = parser.build_daily_summary(df, meta["Date From"], meta["Date To"])
         shifts_df = parser.build_hours_worked(df)
-        timesheet_df = parser.build_timesheet(df, meta)
+        timesheet_df = parser.build_timesheet(
+            df, meta, work_days=parsed_work_days, hours_per_day=hours_per_day
+        )
 
-        parser.build_workbook(meta, timesheet_df, out_path)
+        parser.build_workbook(
+            meta, timesheet_df, out_path, work_days=parsed_work_days, hours_per_day=hours_per_day
+        )
 
         total_hours = float(shifts_df["Hours Worked"].sum())
         xlsx_bytes = out_path.read_bytes()

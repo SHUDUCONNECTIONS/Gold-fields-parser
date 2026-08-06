@@ -17,7 +17,7 @@ import queue
 import sys
 import threading
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, X, Y, filedialog, messagebox
+from tkinter import BOTH, END, LEFT, RIGHT, X, Y, BooleanVar, StringVar, filedialog, messagebox
 from tkinter import ttk
 
 import clocking_report_parser as parser
@@ -104,6 +104,31 @@ class App:
         ttk.Button(out_row, text="Choose...", command=self._choose_output_dir).pack(side=RIGHT)
         ttk.Button(out_row, text="Default", command=self._reset_output_dir).pack(side=RIGHT, padx=8)
 
+        # There's no roster in the source PDF, so "Shift"/"Planned" in the
+        # output are a guess from which weekdays are ticked here - not from
+        # any individual employee's actual schedule. See clocking_report_parser
+        # .build_timesheet() for the caveats.
+        sched_row = ttk.LabelFrame(self.root, text="Schedule used to guess Shift / Planned hours")
+        sched_row.pack(fill=X, padx=12, pady=(0, 8))
+        days_row = ttk.Frame(sched_row)
+        days_row.pack(fill=X, padx=8, pady=(6, 2))
+        self.day_vars = {}
+        for abbr, label, default_on in [
+            ("mon", "Mon", True), ("tue", "Tue", True), ("wed", "Wed", True),
+            ("thu", "Thu", True), ("fri", "Fri", True), ("sat", "Sat", False),
+            ("sun", "Sun", False),
+        ]:
+            var = BooleanVar(value=default_on)
+            self.day_vars[abbr] = var
+            ttk.Checkbutton(days_row, text=label, variable=var).pack(side=LEFT, padx=(0, 8))
+        hours_row = ttk.Frame(sched_row)
+        hours_row.pack(fill=X, padx=8, pady=(2, 6))
+        ttk.Label(hours_row, text="Hours per scheduled day:").pack(side=LEFT)
+        self.hours_per_day_var = StringVar(value="8")
+        ttk.Spinbox(
+            hours_row, from_=0, to=24, increment=0.5, width=6, textvariable=self.hours_per_day_var
+        ).pack(side=LEFT, padx=8)
+
         action_row = ttk.Frame(self.root)
         action_row.pack(fill=X, padx=12, pady=(0, 8))
         self.parse_btn = ttk.Button(action_row, text="Parse", command=self._start_parse)
@@ -175,6 +200,18 @@ class App:
             messagebox.showwarning(APP_TITLE, "Add at least one PDF or folder first.")
             return
 
+        work_days = {abbr for abbr, var in self.day_vars.items() if var.get()}
+        if not work_days:
+            messagebox.showwarning(APP_TITLE, "Tick at least one scheduled working day.")
+            return
+        try:
+            hours_per_day = float(self.hours_per_day_var.get())
+        except ValueError:
+            messagebox.showwarning(APP_TITLE, "Hours per scheduled day must be a number.")
+            return
+        self._work_days = parser.parse_work_days(",".join(work_days))
+        self._hours_per_day = hours_per_day
+
         self.log_text.delete("1.0", END)
         self.parse_btn.configure(state="disabled")
         self.open_out_btn.configure(state="disabled")
@@ -190,7 +227,11 @@ class App:
 
         try:
             ok, failed = parser.run_batch(
-                self.input_paths, output_dir=self.output_dir, log=log
+                self.input_paths,
+                output_dir=self.output_dir,
+                log=log,
+                work_days=self._work_days,
+                hours_per_day=self._hours_per_day,
             )
             self.msg_queue.put(("done", (ok, failed)))
         except Exception as e:

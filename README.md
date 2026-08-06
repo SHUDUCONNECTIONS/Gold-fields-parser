@@ -124,10 +124,14 @@ table with totals and a Planned/Actual/Overtime summary box.
   day in the report's date range gets a row, not just days with clockings.
 - **1st / 2nd** are that day's first and last clocking; **Hrs of work** is
   simply their difference.
-- **Shift and Planned hours are guessed from day-of-week** (Mon–Fri = D/S +
-  8h planned, Sat/Sun = OFF) — there's no roster in the source PDF, so this
-  is wrong for anyone on a non-standard week (night shift, rotating roster,
-  etc.).
+- **Shift and Planned hours are guessed from day-of-week** — there's no
+  roster in the source PDF, so this is a guess, not a fact, and it's still
+  wrong for anyone on a non-standard week (night shift, rotating roster,
+  part-time, etc.) no matter how it's configured. The schedule itself
+  *is* configurable rather than hardcoded to Mon–Fri/8h:
+  - **CLI**: `--work-days mon,tue,wed,thu,fri` and `--hours-per-day 8`
+  - **Desktop app**: day checkboxes + an hours field above the Parse button
+  - **Web app (local + Vercel)**: the same controls under the drop zone
 - **O/T Minutes and S/T Minutes** (the 1.5x/2.0x overtime split) are left
   blank — that requires the employer's actual payroll policy, not just clock
   times.

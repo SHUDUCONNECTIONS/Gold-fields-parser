@@ -2,15 +2,16 @@
 Clocking Report Parser - Web App Backend
 ===========================================
 A thin FastAPI wrapper around clocking_report_parser.py. Runs entirely on
-localhost: uploaded PDFs and generated workbooks live in a temp folder for
-the lifetime of the process, nothing leaves the machine.
+localhost: uploaded PDFs live in a temp folder for the lifetime of the
+process, nothing leaves the machine.
 
 Endpoints
 ---------
-POST /api/parse        - upload one PDF, parse it, return a JSON summary + a
-                          download id for the resulting .xlsx
-GET  /api/download/{id} - fetch the generated workbook for a previous /parse call
-GET  /api/health        - liveness check
+POST /api/parse   - upload one PDF, parse it, return a JSON summary plus the
+                     finished .xlsx inline as base64 (same contract as the
+                     Vercel backend in api/index.py, so the frontend doesn't
+                     need to special-case which one it's talking to)
+GET  /api/health  - liveness check
 
 USAGE
 -----
@@ -18,14 +19,14 @@ USAGE
     uvicorn main:app --port 8000
 """
 
+import base64
 import sys
 import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -44,14 +45,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-WORK_DIR = Path(tempfile.mkdtemp(prefix="clocking_report_webapp_"))
-
-# job id -> {"path": Path, "filename": str}
-JOBS: dict[str, dict] = {}
-
 
 class ParseResult(BaseModel):
-    id: str
     filename: str
     status: str  # "ok" | "error"
     message: str
@@ -59,7 +54,8 @@ class ParseResult(BaseModel):
     days: int | None = None
     shifts: int | None = None
     total_hours: float | None = None
-    download_url: str | None = None
+    xlsx_base64: str | None = None
+    download_name: str | None = None
 
 
 @app.get("/api/health")
@@ -68,14 +64,19 @@ def health():
 
 
 @app.post("/api/parse", response_model=ParseResult)
-async def parse_pdf(file: UploadFile):
+async def parse_pdf(
+    file: UploadFile,
+    work_days: str = Form(default="mon,tue,wed,thu,fri"),
+    hours_per_day: float = Form(default=parser.DEFAULT_HOURS_PER_DAY),
+):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only .pdf files are supported")
+    try:
+        parsed_work_days = parser.parse_work_days(work_days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
-    job_id = uuid.uuid4().hex
-    job_dir = WORK_DIR / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-
+    job_dir = Path(tempfile.mkdtemp(prefix=f"clocking_{uuid.uuid4().hex}_"))
     in_path = job_dir / file.filename
     with open(in_path, "wb") as f:
         f.write(await file.read())
@@ -83,7 +84,6 @@ async def parse_pdf(file: UploadFile):
     out_name = Path(file.filename).stem + "_parsed.xlsx"
     out_path = job_dir / out_name
 
-    logs = []
     try:
         meta, records = parser.parse_pdf(str(in_path))
         if not records:
@@ -94,16 +94,18 @@ async def parse_pdf(file: UploadFile):
         df = parser.build_dataframe(records)
         full_daily = parser.build_daily_summary(df, meta["Date From"], meta["Date To"])
         shifts_df = parser.build_hours_worked(df)
-        timesheet_df = parser.build_timesheet(df, meta)
+        timesheet_df = parser.build_timesheet(
+            df, meta, work_days=parsed_work_days, hours_per_day=hours_per_day
+        )
 
-        parser.build_workbook(meta, timesheet_df, out_path)
+        parser.build_workbook(
+            meta, timesheet_df, out_path, work_days=parsed_work_days, hours_per_day=hours_per_day
+        )
 
         total_hours = float(shifts_df["Hours Worked"].sum())
-
-        JOBS[job_id] = {"path": out_path, "filename": out_name}
+        xlsx_bytes = out_path.read_bytes()
 
         return ParseResult(
-            id=job_id,
             filename=file.filename,
             status="ok",
             message=f"{meta.get('First Names', '')} {meta.get('SurName', '')}".strip()
@@ -112,27 +114,11 @@ async def parse_pdf(file: UploadFile):
             days=int(full_daily.shape[0]),
             shifts=len(shifts_df),
             total_hours=round(total_hours, 2),
-            download_url=f"/api/download/{job_id}",
+            xlsx_base64=base64.b64encode(xlsx_bytes).decode("ascii"),
+            download_name=out_name,
         )
     except Exception as e:
-        return ParseResult(
-            id=job_id,
-            filename=file.filename,
-            status="error",
-            message=str(e),
-        )
-
-
-@app.get("/api/download/{job_id}")
-def download(job_id: str):
-    job = JOBS.get(job_id)
-    if not job or not job["path"].exists():
-        raise HTTPException(404, "Not found - it may have already expired")
-    return FileResponse(
-        job["path"],
-        filename=job["filename"],
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        return ParseResult(filename=file.filename, status="error", message=str(e))
 
 
 # Serve the built frontend (npm run build -> ../frontend/dist), if present.
