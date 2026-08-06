@@ -508,17 +508,18 @@ def write_timesheet_sheet(wb, meta, timesheet_df):
     ws.cell(row=box_row, column=7, value=f"=G{total_row}").number_format = "[h]:mm"
     ws.cell(row=box_row + 1, column=6, value="Actual Hours").font = LABEL_FONT
     ws.cell(row=box_row + 1, column=7, value=f"=F{total_row}").number_format = "[h]:mm"
-    ws.cell(row=box_row + 2, column=6, value="Overtime (Actual - Planned)").font = LABEL_FONT
+    ws.cell(row=box_row + 2, column=6, value="Overtime").font = LABEL_FONT
     ws.cell(
         row=box_row + 2, column=7, value=f"=F{total_row}-G{total_row}"
     ).number_format = "[h]:mm"
     note = ws.cell(
         row=box_row + 4, column=1,
         value=(
-            "Note: O/T Minutes, S/T Minutes and the O/T 1,5 / O/T 2,0 split are not "
-            "computed - the payroll rule for dividing overtime between the 1.5x and "
-            "2.0x buckets isn't derivable from clocking data alone. 'Shift'/'Planned' "
-            "are assigned by day-of-week (Mon-Fri = D/S, Sat/Sun = OFF), not an actual roster."
+            "Note: Overtime = Actual Hours - Planned Hours. O/T Minutes, S/T Minutes and "
+            "the O/T 1,5 / O/T 2,0 split are not computed - the payroll rule for dividing "
+            "overtime between the 1.5x and 2.0x buckets isn't derivable from clocking data "
+            "alone. 'Shift'/'Planned' are assigned by day-of-week (Mon-Fri = D/S, Sat/Sun = "
+            "OFF), not an actual roster."
         ),
     )
     note.font = Font(name="Arial", size=9, italic=True, color="555555")
@@ -527,7 +528,11 @@ def write_timesheet_sheet(wb, meta, timesheet_df):
     ws.row_dimensions[box_row + 4].height = 30
 
     ws.freeze_panes = f"A{first_data_row}"
-    for c, w in enumerate([12, 12, 7, 12, 12, 11, 9, 11, 11, 24], start=1):
+    # Widths are sized for the widest of: the header text + its autofilter
+    # dropdown arrow, the data it holds, and (for A/F) the row-3/4 and
+    # summary-box labels that share those columns ("Employee Number",
+    # "Planned Hours", etc.) - not just the header text alone.
+    for c, w in enumerate([20, 12, 11, 12, 12, 16, 12, 16, 16, 26], start=1):
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.auto_filter.ref = f"A{header_row}:J{total_row - 1}"
 
