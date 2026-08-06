@@ -23,6 +23,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # clocking_report_parser.py lives at the project root, one level up from
@@ -124,3 +125,13 @@ async def parse_pdf(file: UploadFile, authorization: str | None = Header(default
         )
     except Exception as e:
         return ParseResult(filename=file.filename, status="error", message=str(e))
+
+
+# Serve the built frontend (webapp/frontend/dist, bundled into this function
+# via vercel.json's includeFiles) for every other path. Vercel now routes
+# ALL requests for this project through this one FastAPI app rather than
+# hosting static files separately, so this app has to handle both jobs -
+# registered last so it doesn't shadow the /api/* routes above.
+FRONTEND_DIST = PROJECT_ROOT / "webapp" / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
