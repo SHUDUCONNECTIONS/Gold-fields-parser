@@ -541,30 +541,60 @@ def write_timesheet_sheet(wb, meta, timesheet_df, work_days=None, hours_per_day=
             for c in range(1, len(headers) + 1):
                 ws.cell(row=r, column=c).fill = FLAG_FILL
 
+    # Computed here in Python rather than written as Excel formulas (e.g.
+    # "=SUM(...)") - some viewers show formulas as blank until the workbook
+    # is recalculated, so writing the actual value guarantees it's visible
+    # immediately regardless of viewer/calculation settings.
+    def sum_timedeltas(values):
+        # pandas stores this column as timedelta64[ns], so missing entries
+        # are NaT rather than None - and bool(NaT) is True, so a plain
+        # `if v` truthiness check lets NaT through and poisons the sum
+        # (any arithmetic with NaT produces NaT). pd.notna() is required.
+        present = [v for v in values if pd.notna(v)]
+        if not present:
+            return None  # whole column is blank - show blank, not "0:00"
+        total = timedelta()
+        for v in present:
+            total += v
+        return total
+
+    totals = {
+        6: sum_timedeltas(timesheet_df["Hrs of work"]),
+        7: sum_timedeltas(timesheet_df["Planned"]),
+        8: sum_timedeltas(timesheet_df["O/T Minutes"]),
+        9: sum_timedeltas(timesheet_df["S/T Minutes"]),
+    }
+
     total_row = first_data_row + len(timesheet_df)
     ws.cell(row=total_row, column=5, value="TOTAL").font = Font(name="Arial", size=10, bold=True)
     ws.cell(row=total_row, column=5).alignment = Alignment(horizontal="right")
-    for col in (6, 7, 8, 9):
-        col_letter = get_column_letter(col)
-        cell = ws.cell(
-            row=total_row, column=col,
-            value=f"=SUM({col_letter}{first_data_row}:{col_letter}{total_row - 1})",
-        )
+    for col, total_val in totals.items():
+        cell = ws.cell(row=total_row, column=col, value=total_val)
         cell.font = Font(name="Arial", size=10, bold=True)
         cell.number_format = "[h]:mm"
         cell.alignment = Alignment(horizontal="center")
     for c in range(1, len(headers) + 1):
         ws.cell(row=total_row, column=c).border = BORDER
 
+    planned_total, actual_total = totals[7], totals[6]
+    overtime_total = (
+        actual_total - planned_total
+        if actual_total is not None and planned_total is not None
+        else None
+    )
+
     box_row = total_row + 3
     ws.cell(row=box_row, column=6, value="Planned Hours").font = LABEL_FONT
-    ws.cell(row=box_row, column=7, value=f"=G{total_row}").number_format = "[h]:mm"
+    ws.cell(row=box_row, column=7, value=planned_total).number_format = "[h]:mm"
     ws.cell(row=box_row + 1, column=6, value="Actual Hours").font = LABEL_FONT
-    ws.cell(row=box_row + 1, column=7, value=f"=F{total_row}").number_format = "[h]:mm"
+    ws.cell(row=box_row + 1, column=7, value=actual_total).number_format = "[h]:mm"
     ws.cell(row=box_row + 2, column=6, value="Overtime").font = LABEL_FONT
-    ws.cell(
-        row=box_row + 2, column=7, value=f"=F{total_row}-G{total_row}"
-    ).number_format = "[h]:mm"
+    # Unlike Planned/Actual (always >= 0), Overtime can be negative (under-
+    # worked vs planned) - Excel's "[h]:mm" elapsed-time format can't render
+    # negative durations (shows as ####), so this is decimal hours instead,
+    # which handles negative values fine.
+    overtime_hours = overtime_total.total_seconds() / 3600 if overtime_total is not None else None
+    ws.cell(row=box_row + 2, column=7, value=overtime_hours).number_format = "0.00 \"h\""
     schedule_desc = describe_schedule(work_days or DEFAULT_WORK_DAYS, hours_per_day)
     note = ws.cell(
         row=box_row + 4, column=1,
