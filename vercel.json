@@ -2,7 +2,7 @@
   "buildCommand": "cd webapp/frontend && npm install && npm run build",
   "functions": {
     "api/index.py": {
-      "includeFiles": ["clocking_report_parser.py", "webapp/frontend/dist/**"],
+      "includeFiles": "{clocking_report_parser.py,webapp/frontend/dist/**}",
       "maxDuration": 60
     }
   }
