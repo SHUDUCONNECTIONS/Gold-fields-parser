@@ -1,0 +1,13 @@
+{
+  "buildCommand": "cd webapp/frontend && npm install && npm run build",
+  "outputDirectory": "webapp/frontend/dist",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "clocking_report_parser.py",
+      "maxDuration": 60
+    }
+  }
+}

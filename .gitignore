@@ -1,0 +1,23 @@
+# Sensitive sample data - real employee clocking/payroll records, never commit
+Individual_Clock_History_K.pdf
+Individual_Clock_History_K_parsed.xlsx
+*_parsed.xlsx
+WhatsApp Image*.jpeg
+
+# Python
+__pycache__/
+*.pyc
+
+# Node / frontend build output
+webapp/frontend/node_modules/
+webapp/frontend/dist/
+
+# Vercel
+.vercel
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code tooling config
+.claude/

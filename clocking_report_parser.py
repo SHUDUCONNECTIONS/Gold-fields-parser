@@ -1,0 +1,646 @@
+"""
+Clocking Report Parser
+=======================
+Parses a "South Deep / Gold Fields - Individual Clocking History" PDF report
+(as produced by the web_clock_report_individual program) and exports it to a
+formatted Excel workbook containing a single "Timesheet" sheet: Name/Employee
+Number/Occupation, then one row per calendar day (Day/Date/Shift/1st/2nd/
+Hrs of work/Planned/O-T Minutes/S-T Minutes/Comments), a totals row, and a
+Planned/Actual/Overtime summary box - see build_timesheet() below for exactly
+how each column is derived.
+
+USAGE
+-----
+    pip install pdfplumber pandas openpyxl
+
+    Single file:
+        python clocking_report_parser.py path/to/report.pdf [output.xlsx]
+
+    Batch (every *.pdf in a folder):
+        python clocking_report_parser.py path/to/folder [output_folder]
+
+If the .xlsx / output folder is omitted, each workbook is written as
+"<pdf name>_parsed.xlsx" next to its input PDF. In batch mode, one failing
+PDF is logged and skipped rather than stopping the whole run.
+
+HOW THE PARSING WORKS
+----------------------
+This is a *layout parser*, not an NLP/ML system - the report is a fixed-column
+table, so the most reliable approach is to read each PDF word's x/y position
+(via pdfplumber) and bucket words into columns by their x-coordinate, rather
+than trying to regex the flattened text (which loses the IN vs OUT column
+distinction whenever both are printed on the same line).
+
+Column x-position anchors (points from left edge of page), taken from the
+report's own header row:
+    IN  columns : Date=25  Time=125  From=175  To=225  Point=275  Type=325
+    OUT columns : Time=525 From=575  To=625    Point=675 Type=725
+
+HOURS WORKED METHODOLOGY
+--------------------------
+Rather than using each calendar day's first-to-last clocking (which breaks
+down for overnight shifts and for people working several nights in a row
+with short rest gaps), this script pairs each "Work" type clocking through
+Point "U01" (the underground workplace access point): the IN event marks
+entry to the workplace and the following OUT event marks exit. The
+difference between them is that shift's "hours worked". This deliberately
+excludes surface travel time through access gates (FCP/SG1/SG2/A01/A11/etc.)
+before and after the shift.
+
+If your report uses a different "work area" point code, change WORK_POINT
+below.
+"""
+
+import argparse
+import json
+import re
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+import pdfplumber
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+# ----------------------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------------------
+
+# The point code that represents the actual underground workplace / work area.
+# Used to compute "Hours Worked" from IN/OUT pairs of Type == "Work".
+WORK_POINT = "U01"
+
+# Gap threshold (hours) used only as a sanity fallback if no Work/U01 pairs
+# are found in the report (see build_hours_worked_fallback()).
+FALLBACK_SESSION_GAP_HOURS = 14
+
+# x-coordinate boundaries used to classify each word into IN vs OUT columns,
+# and then into a specific field within that side. Adjust these if your PDF's
+# layout differs (run inspect_columns() below to check).
+IN_OUT_SPLIT_X = 450
+
+IN_FIELD_BOUNDS = [
+    (75, "Date"),
+    (150, "Time"),
+    (200, "From"),
+    (250, "To"),
+    (300, "Point"),
+    (float("inf"), "Type"),
+]
+
+OUT_FIELD_BOUNDS = [
+    (550, "Time"),
+    (600, "From"),
+    (650, "To"),
+    (700, "Point"),
+    (float("inf"), "Type"),
+]
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+
+SKIP_LINE_SUBSTRINGS = [
+    "Program - web_clock_report_individual",
+    "South Deep",
+    "Date From",
+    "Date To",
+    "Individual Clocking History",
+    "Ind Nbr",
+    "SurName",
+    "First Names",
+    "IN CLOCKINGS",
+    "OUT CLOCKINGS",
+    "End of Clocking Report",
+]
+
+
+# ----------------------------------------------------------------------------
+# Step 1: Parse the PDF into structured records
+# ----------------------------------------------------------------------------
+
+def classify_field(x0, bounds):
+    for boundary, name in bounds:
+        if x0 < boundary:
+            return name
+    return bounds[-1][1]
+
+
+def chunk_into_fields(word_texts):
+    """Given a flat list of word strings for one side (IN or OUT) of a line,
+    split them into groups of 5: Time, From, To, Point, Type."""
+    records = []
+    i = 0
+    while i < len(word_texts):
+        if i + 5 <= len(word_texts) and TIME_RE.match(word_texts[i]):
+            records.append(
+                {
+                    "Time": word_texts[i],
+                    "From": word_texts[i + 1],
+                    "To": word_texts[i + 2],
+                    "Point": word_texts[i + 3],
+                    "Type": word_texts[i + 4],
+                }
+            )
+            i += 5
+        else:
+            i += 1
+    return records
+
+
+def parse_metadata(first_page_text):
+    meta = {}
+    for line in first_page_text.split("\n"):
+        if line.startswith("Ind Nbr"):
+            m = re.search(r"Ind Nbr:\s*(\S+)\s*Org Unit:\s*(.+)", line)
+            if m:
+                meta["Ind Nbr"] = m.group(1)
+                meta["Org Unit"] = m.group(2).strip()
+        if line.startswith("SurName"):
+            m = re.search(r"SurName:\s*(\S+)\s*Designation:\s*(.+)", line)
+            if m:
+                meta["SurName"] = m.group(1)
+                meta["Designation"] = m.group(2).strip()
+        if line.startswith("First Names"):
+            m = re.search(
+                r"First Names:\s*(.+?)\s*Type:\s*(\S+)\s*Environment:\s*(\S+)", line
+            )
+            if m:
+                meta["First Names"] = m.group(1).strip()
+                meta["Type"] = m.group(2)
+                meta["Environment"] = m.group(3)
+        if "Date From" in line:
+            m = re.search(r"Date From\s*:\s*(\S+)", line)
+            if m:
+                meta["Date From"] = m.group(1)
+        if "Date To" in line:
+            m = re.search(r"Date To\s*:\s*(\S+)", line)
+            if m:
+                meta["Date To"] = m.group(1)
+    return meta
+
+
+def parse_pdf(pdf_path):
+    """Returns (meta_dict, list_of_clocking_record_dicts)."""
+    records = []
+    current_date = None
+
+    with pdfplumber.open(pdf_path) as pdf:
+        meta = parse_metadata(pdf.pages[0].extract_text())
+
+        for page in pdf.pages:
+            words = page.extract_words()
+
+            # Group words into visual lines by their y-position ("top").
+            lines = {}
+            for w in words:
+                top = round(w["top"])
+                lines.setdefault(top, []).append(w)
+
+            for top in sorted(lines.keys()):
+                ws = sorted(lines[top], key=lambda w: w["x0"])
+                line_str = " ".join(w["text"] for w in ws)
+
+                if any(s in line_str for s in SKIP_LINE_SUBSTRINGS):
+                    continue
+                if line_str.strip() == "Date Time From To Point Type Time From To Point Type":
+                    continue
+                if not line_str.strip():
+                    continue
+
+                in_words = [w for w in ws if w["x0"] < IN_OUT_SPLIT_X]
+                out_words = [w for w in ws if w["x0"] >= IN_OUT_SPLIT_X]
+
+                # A date at the start of the IN side updates current_date.
+                line_date = current_date
+                if in_words and DATE_RE.match(in_words[0]["text"]):
+                    line_date = in_words[0]["text"]
+                    current_date = line_date
+                    in_words = in_words[1:]
+
+                in_texts = [w["text"] for w in in_words]
+                out_texts = [w["text"] for w in out_words]
+
+                for rec in chunk_into_fields(in_texts):
+                    records.append({"Date": line_date, "Direction": "IN", **rec})
+                for rec in chunk_into_fields(out_texts):
+                    records.append({"Date": line_date, "Direction": "OUT", **rec})
+
+    return meta, records
+
+
+# ----------------------------------------------------------------------------
+# Step 2: Build derived tables (daily summary, hours worked, weekly hours)
+# ----------------------------------------------------------------------------
+
+def build_dataframe(records):
+    df = pd.DataFrame(records)
+    df["Datetime"] = pd.to_datetime(df["Date"] + " " + df["Time"])
+    df = df.sort_values("Datetime").reset_index(drop=True)
+    return df
+
+
+def build_daily_summary(df, date_from, date_to):
+    grp = df.groupby("Date")
+    daily = grp.agg(
+        First_Clocking=("Time", "min"),
+        Last_Clocking=("Time", "max"),
+        Num_Events=("Time", "count"),
+    ).reset_index()
+
+    start = datetime.strptime(date_from, "%Y-%m-%d")
+    end = datetime.strptime(date_to, "%Y-%m-%d")
+    all_dates = []
+    cur = start
+    while cur <= end:
+        all_dates.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+
+    full_daily = pd.DataFrame({"Date": all_dates}).merge(daily, on="Date", how="left")
+    full_daily["Num_Events"] = full_daily["Num_Events"].fillna(0).astype(int)
+    full_daily["First_Clocking"] = full_daily["First_Clocking"].fillna("")
+    full_daily["Last_Clocking"] = full_daily["Last_Clocking"].fillna("")
+    full_daily["Status"] = full_daily["Num_Events"].apply(
+        lambda n: "No Clocking" if n == 0 else "Clocked"
+    )
+    return full_daily
+
+
+def build_hours_worked(df, work_point=WORK_POINT):
+    """Pair IN/OUT clockings of Type == 'Work' at `work_point` into shifts."""
+    work = df[(df["Type"] == "Work") & (df["Point"] == work_point)].reset_index(drop=True)
+
+    if work.empty:
+        return build_hours_worked_fallback(df)
+
+    shifts = []
+    i = 0
+    while i < len(work):
+        a = work.iloc[i]
+        if a["Direction"] == "IN" and i + 1 < len(work) and work.iloc[i + 1]["Direction"] == "OUT":
+            b = work.iloc[i + 1]
+            dur_h = (b["Datetime"] - a["Datetime"]).total_seconds() / 3600
+            shifts.append(
+                {
+                    "Shift Date": a["Date"],
+                    "Clock In": a["Time"],
+                    "Clock Out Date": b["Date"],
+                    "Clock Out": b["Time"],
+                    "Hours Worked": round(dur_h, 2),
+                    "Note": "Short / possible anomaly" if dur_h < 1 else "",
+                }
+            )
+            i += 2
+        else:
+            shifts.append(
+                {
+                    "Shift Date": a["Date"],
+                    "Clock In": a["Time"] if a["Direction"] == "IN" else "",
+                    "Clock Out Date": a["Date"] if a["Direction"] == "OUT" else "",
+                    "Clock Out": a["Time"] if a["Direction"] == "OUT" else "",
+                    "Hours Worked": 0,
+                    "Note": "Unmatched clocking - could not pair",
+                }
+            )
+            i += 1
+
+    return pd.DataFrame(shifts)
+
+
+def build_hours_worked_fallback(df, gap_hours=FALLBACK_SESSION_GAP_HOURS):
+    """Used only if no Work/`WORK_POINT` events exist in the report: clusters
+    ALL clockings into sessions separated by gaps > gap_hours. Less accurate
+    than the Work-point pairing (may merge consecutive shifts with short
+    rest gaps), so only used as a last resort."""
+    gap = df["Datetime"].diff().dt.total_seconds() / 3600
+    new_session = (gap > gap_hours) | gap.isna()
+    df = df.copy()
+    df["Session"] = new_session.cumsum()
+
+    sessions = df.groupby("Session").agg(Start=("Datetime", "min"), End=("Datetime", "max"))
+    sessions["Hours Worked"] = (
+        (sessions["End"] - sessions["Start"]).dt.total_seconds() / 3600
+    ).round(2)
+    sessions = sessions.reset_index()
+
+    return pd.DataFrame(
+        {
+            "Shift Date": sessions["Start"].dt.strftime("%Y-%m-%d"),
+            "Clock In": sessions["Start"].dt.strftime("%H:%M:%S"),
+            "Clock Out Date": sessions["End"].dt.strftime("%Y-%m-%d"),
+            "Clock Out": sessions["End"].dt.strftime("%H:%M:%S"),
+            "Hours Worked": sessions["Hours Worked"],
+            "Note": "Fallback: clustered by gap > "
+            f"{gap_hours}h (no Work/{WORK_POINT} events found)",
+        }
+    )
+
+
+def build_timesheet(df, meta):
+    """Builds the day-by-day timesheet table (Day/Date/Shift/1st/2nd/Hrs of
+    work/Planned/O-T Minutes/S-T Minutes/Comments) shown in the target report
+    layout. One row per calendar day in the report's date range.
+
+    Shift/Planned are assigned by day-of-week only (Mon-Fri = "D/S" with an
+    8-hour planned day, Sat/Sun = "OFF" with no planned hours) - this does
+    NOT read an actual roster, since none is available in the source PDF.
+    1st/2nd are the first and last clocking of the day (any type), and
+    Hrs of work is simply their difference, matching the reference layout.
+
+    O/T Minutes and S/T Minutes (the 1.5x / 2.0x overtime split) are left
+    blank: splitting overtime between those buckets requires the payroll
+    policy's actual rule, which isn't derivable from clocking data alone.
+    """
+    start = datetime.strptime(meta["Date From"], "%Y-%m-%d")
+    end = datetime.strptime(meta["Date To"], "%Y-%m-%d")
+
+    span = df.groupby("Date")["Datetime"].agg(First="min", Last="max")
+
+    rows = []
+    cur = start
+    while cur <= end:
+        date_str = cur.strftime("%Y-%m-%d")
+        is_weekend = cur.weekday() >= 5
+
+        if date_str in span.index:
+            first_dt = span.loc[date_str, "First"]
+            last_dt = span.loc[date_str, "Last"]
+            hrs_of_work = last_dt - first_dt
+        else:
+            first_dt = last_dt = hrs_of_work = None
+
+        comment = ""
+        if not is_weekend and first_dt is None:
+            comment = "No clocking recorded"
+        elif is_weekend and first_dt is not None:
+            comment = "Worked on OFF day"
+
+        rows.append(
+            {
+                "Day": cur.strftime("%A"),
+                "Date": cur,
+                "Shift": "OFF" if is_weekend else "D/S",
+                "1st": first_dt.time() if first_dt is not None else None,
+                "2nd": last_dt.time() if last_dt is not None else None,
+                "Hrs of work": hrs_of_work,
+                "Planned": None if is_weekend else timedelta(hours=8),
+                "O/T Minutes": None,
+                "S/T Minutes": None,
+                "Comments": comment,
+                "Is Weekend": is_weekend,
+            }
+        )
+        cur += timedelta(days=1)
+
+    return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------------------------
+# Step 3: Write the Excel workbook
+# ----------------------------------------------------------------------------
+
+HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+HEADER_FONT = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+BODY_FONT = Font(name="Arial", size=10)
+TITLE_FONT = Font(name="Arial", size=14, bold=True)
+LABEL_FONT = Font(name="Arial", size=11, bold=True)
+INFO_FONT = Font(name="Arial", size=11)
+THIN = Side(style="thin", color="CCCCCC")
+BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+FLAG_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+WEEKEND_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+VALUE_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+
+
+def style_header_row(ws, headers, row=1):
+    for c, h in enumerate(headers, start=1):
+        cell = ws.cell(row=row, column=c, value=h)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = BORDER
+
+
+def write_timesheet_sheet(wb, meta, timesheet_df):
+    ws = wb.active
+    ws.title = "Timesheet"
+
+    name = f"{meta.get('First Names', '')} {meta.get('SurName', '')}".strip()
+
+    ws["A1"] = "Individual Clocking History - Timesheet"
+    ws["A1"].font = TITLE_FONT
+    ws.merge_cells("A1:E1")
+
+    ws["A3"] = "Name"
+    ws["A3"].font = LABEL_FONT
+    ws["B3"] = name
+    ws["B3"].font = INFO_FONT
+    ws.merge_cells("B3:D3")
+
+    ws["A4"] = "Employee Number"
+    ws["A4"].font = LABEL_FONT
+    ws["B4"] = meta.get("Ind Nbr", "")
+    ws["B4"].font = INFO_FONT
+    ws["B4"].fill = VALUE_FILL
+    ws.merge_cells("B4:D4")
+
+    ws["F3"] = "Occupation"
+    ws["F3"].font = LABEL_FONT
+    ws["G3"] = meta.get("Designation", "")
+    ws["G3"].font = INFO_FONT
+    ws["G3"].fill = VALUE_FILL
+    ws.merge_cells("G3:J3")
+
+    headers = [
+        "Day", "Date", "Shift", "1st", "2nd", "Hrs of work", "Planned",
+        "O/T Minutes", "S/T Minutes", "Comments",
+    ]
+    header_row = 6
+    style_header_row(ws, headers, row=header_row)
+
+    first_data_row = header_row + 1
+    for i, row in timesheet_df.iterrows():
+        r = first_data_row + i
+        vals = [
+            row["Day"], row["Date"], row["Shift"], row["1st"], row["2nd"],
+            row["Hrs of work"], row["Planned"], row["O/T Minutes"],
+            row["S/T Minutes"], row["Comments"],
+        ]
+        for c, v in enumerate(vals, start=1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.font = BODY_FONT
+            cell.border = BORDER
+            header_name = headers[c - 1]
+            if header_name == "Date":
+                cell.number_format = "yyyy/mm/dd"
+            elif header_name in ("1st", "2nd"):
+                cell.number_format = "h:mm:ss AM/PM"
+                cell.alignment = Alignment(horizontal="center")
+            elif header_name in ("Hrs of work", "Planned", "O/T Minutes", "S/T Minutes"):
+                cell.number_format = "[h]:mm"
+                cell.alignment = Alignment(horizontal="center")
+            elif header_name == "Shift":
+                cell.alignment = Alignment(horizontal="center")
+        if row["Is Weekend"]:
+            ws.cell(row=r, column=3).fill = WEEKEND_FILL
+        if row["Comments"]:
+            for c in range(1, len(headers) + 1):
+                ws.cell(row=r, column=c).fill = FLAG_FILL
+
+    total_row = first_data_row + len(timesheet_df)
+    ws.cell(row=total_row, column=5, value="TOTAL").font = Font(name="Arial", size=10, bold=True)
+    ws.cell(row=total_row, column=5).alignment = Alignment(horizontal="right")
+    for col in (6, 7, 8, 9):
+        col_letter = get_column_letter(col)
+        cell = ws.cell(
+            row=total_row, column=col,
+            value=f"=SUM({col_letter}{first_data_row}:{col_letter}{total_row - 1})",
+        )
+        cell.font = Font(name="Arial", size=10, bold=True)
+        cell.number_format = "[h]:mm"
+        cell.alignment = Alignment(horizontal="center")
+    for c in range(1, len(headers) + 1):
+        ws.cell(row=total_row, column=c).border = BORDER
+
+    box_row = total_row + 3
+    ws.cell(row=box_row, column=6, value="Planned Hours").font = LABEL_FONT
+    ws.cell(row=box_row, column=7, value=f"=G{total_row}").number_format = "[h]:mm"
+    ws.cell(row=box_row + 1, column=6, value="Actual Hours").font = LABEL_FONT
+    ws.cell(row=box_row + 1, column=7, value=f"=F{total_row}").number_format = "[h]:mm"
+    ws.cell(row=box_row + 2, column=6, value="Overtime (Actual - Planned)").font = LABEL_FONT
+    ws.cell(
+        row=box_row + 2, column=7, value=f"=F{total_row}-G{total_row}"
+    ).number_format = "[h]:mm"
+    note = ws.cell(
+        row=box_row + 4, column=1,
+        value=(
+            "Note: O/T Minutes, S/T Minutes and the O/T 1,5 / O/T 2,0 split are not "
+            "computed - the payroll rule for dividing overtime between the 1.5x and "
+            "2.0x buckets isn't derivable from clocking data alone. 'Shift'/'Planned' "
+            "are assigned by day-of-week (Mon-Fri = D/S, Sat/Sun = OFF), not an actual roster."
+        ),
+    )
+    note.font = Font(name="Arial", size=9, italic=True, color="555555")
+    ws.merge_cells(start_row=box_row + 4, start_column=1, end_row=box_row + 4, end_column=10)
+    note.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[box_row + 4].height = 30
+
+    ws.freeze_panes = f"A{first_data_row}"
+    for c, w in enumerate([12, 12, 7, 12, 12, 11, 9, 11, 11, 24], start=1):
+        ws.column_dimensions[get_column_letter(c)].width = w
+    ws.auto_filter.ref = f"A{header_row}:J{total_row - 1}"
+
+
+def build_workbook(meta, timesheet_df, out_path):
+    wb = Workbook()
+    write_timesheet_sheet(wb, meta, timesheet_df)
+    wb.save(out_path)
+
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+def process_one(pdf_path, out_path, log=print):
+    """Parses a single Individual Clocking History PDF and writes its workbook.
+    Raises on failure (caller decides whether to keep going in a batch)."""
+    log(f"Parsing {pdf_path} ...")
+    meta, records = parse_pdf(str(pdf_path))
+    if not records:
+        raise ValueError("No clocking records found - check the PDF layout / column x-positions.")
+
+    df = build_dataframe(records)
+    full_daily = build_daily_summary(df, meta["Date From"], meta["Date To"])
+    shifts_df = build_hours_worked(df)
+    timesheet_df = build_timesheet(df, meta)
+
+    build_workbook(meta, timesheet_df, out_path)
+
+    total_hours = shifts_df["Hours Worked"].sum()
+    log(f"Parsed {len(records)} clocking events across {full_daily.shape[0]} calendar days.")
+    log(f"Identified {len(shifts_df)} shift(s), total hours worked: {total_hours:.2f}")
+    log(f"Workbook written to: {out_path}")
+
+
+def run_batch(input_paths, output_dir=None, log=print):
+    """Shared entry point for both the CLI and the GUI app.
+
+    `input_paths` is a list of files and/or folders (folders are expanded to
+    every *.pdf inside them). Each PDF is parsed independently - one failure
+    is logged and skipped rather than aborting the rest.
+
+    Returns (ok, failed) where `ok` is a list of (pdf_path, out_path) and
+    `failed` is a list of (pdf_path, error_message).
+    """
+    pdf_files = []
+    for p in input_paths:
+        p = Path(p)
+        if p.is_dir():
+            pdf_files.extend(sorted(p.glob("*.pdf")))
+        elif p.suffix.lower() == ".pdf":
+            pdf_files.append(p)
+
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    ok, failed = [], []
+    for f in pdf_files:
+        out_path = (output_dir / (f.stem + "_parsed.xlsx")) if output_dir else f.with_name(
+            f.stem + "_parsed.xlsx"
+        )
+        try:
+            process_one(f, out_path, log=log)
+            ok.append((f, out_path))
+        except Exception as e:
+            log(f"  FAILED: {f.name}: {e}")
+            failed.append((f, str(e)))
+        log("")
+
+    log(f"Done: {len(ok)} succeeded, {len(failed)} failed.")
+    return ok, failed
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "pdf_path",
+        help="Path to a single Individual Clocking History PDF, OR a folder "
+        "containing several such PDFs (batch mode - every *.pdf in the folder "
+        "is parsed).",
+    )
+    ap.add_argument(
+        "output_xlsx",
+        nargs="?",
+        default=None,
+        help="Single-file mode: path to write the output .xlsx (default: "
+        "<pdf name>_parsed.xlsx next to the input). Batch mode: an output "
+        "folder to write all workbooks into (default: alongside each input PDF).",
+    )
+    args = ap.parse_args()
+
+    pdf_path = Path(args.pdf_path)
+    if not pdf_path.exists():
+        sys.exit(f"Path not found: {pdf_path}")
+
+    if pdf_path.is_dir():
+        out_dir = Path(args.output_xlsx) if args.output_xlsx else None
+        ok, failed = run_batch([pdf_path], output_dir=out_dir)
+        if not ok and not failed:
+            sys.exit(f"No .pdf files found in {pdf_path}")
+        if failed:
+            print("Failed files:")
+            for f, err in failed:
+                print(f"  - {f}: {err}")
+            sys.exit(1)
+        return
+
+    out_path = Path(args.output_xlsx) if args.output_xlsx else pdf_path.with_name(
+        pdf_path.stem + "_parsed.xlsx"
+    )
+    process_one(pdf_path, out_path)
+
+
+if __name__ == "__main__":
+    main()
