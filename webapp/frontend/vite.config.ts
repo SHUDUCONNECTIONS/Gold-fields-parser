@@ -8,6 +8,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Registration is done manually in main.tsx (via virtual:pwa-register)
+      // so we can force a reload the moment a new service worker takes
+      // over - otherwise updates only apply on some later, unrelated visit
+      // and the page looks stuck on the old build until a hard refresh.
+      injectRegister: false,
       includeAssets: ['favicon.svg'],
       manifest: {
         name: 'Clocking Report Parser',
