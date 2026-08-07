@@ -2,13 +2,13 @@
   --bg: #f2f1ef;
   --panel: #ffffff;
   --panel-border: #00000010;
-  --text: #1c1c1c;
-  --text-dim: #5c5c5c;
-  --text-faint: #8f8f8f;
-  --accent-1: #1a1a1a;
+  --text: #2b2419;
+  --text-dim: #6b6355;
+  --text-faint: #9c9484;
+  --accent-1: #f4d35e;
   --accent-2: #d4a017;
   --accent-3: #f0c419;
-  --accent-grad: linear-gradient(135deg, var(--accent-1), var(--accent-1) 55%, var(--accent-2));
+  --accent-grad: linear-gradient(135deg, var(--accent-1), var(--accent-2));
   --gold: #d4a017;
   --ok: #16a34a;
   --ok-bg: #dcfce7;
