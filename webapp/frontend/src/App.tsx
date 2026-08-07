@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import "./App.css";
 import { downloadResult, parseFile } from "./api";
+import ramsLogo from "./assets/rams-logo.png";
 import { AuthError, clearStoredPassword, getStoredPassword } from "./auth";
 import Blobs from "./Blobs";
 import Login from "./Login";
@@ -174,18 +175,7 @@ export default function App() {
     <div className="app">
       <Blobs />
       <header className="hero">
-        <div className="hero-icon" aria-hidden>
-          <svg viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="12" r="9.5" stroke="#ffffff" strokeWidth="1.6" />
-            <path
-              d="M12 7v5l3.5 2"
-              stroke="#ffffff"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
+        <img src={ramsLogo} alt="Rams Mining Technologies" className="hero-logo" />
         <h1>Clocking Report Parser</h1>
         <p>
           Drop in Individual Clocking History PDFs — get back ready-to-use

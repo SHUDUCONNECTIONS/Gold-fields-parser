@@ -19,21 +19,11 @@
   animation: fade-up 0.5s ease both;
 }
 
-.hero-icon {
-  width: 52px;
-  height: 52px;
+.hero-logo {
+  height: 56px;
+  width: auto;
   margin: 0 auto 16px;
-  border-radius: 16px;
-  background: var(--accent-grad);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 12px 24px -8px #a855f766;
-}
-
-.hero-icon svg {
-  width: 26px;
-  height: 26px;
+  display: block;
 }
 
 .hero h1 {
@@ -116,7 +106,7 @@
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
   padding: 24px;
-  box-shadow: 0 30px 60px -24px #7c3aed3d;
+  box-shadow: 0 30px 60px -24px #00000030;
   animation: fade-up 0.5s ease 0.1s both;
 }
 
@@ -330,7 +320,7 @@
 .btn-primary {
   background: var(--accent-grad);
   color: #ffffff;
-  box-shadow: 0 10px 20px -8px #a855f766;
+  box-shadow: 0 10px 20px -8px #d4a01766;
 }
 
 .btn-primary:not(:disabled):hover {
@@ -450,8 +440,8 @@
 }
 
 .badge-parsing {
-  background: #6366f11e;
-  color: var(--accent-1);
+  background: #d4a0171e;
+  color: var(--gold);
 }
 
 .badge-ok {

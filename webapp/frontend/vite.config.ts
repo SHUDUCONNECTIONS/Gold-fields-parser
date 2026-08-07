@@ -15,8 +15,8 @@ export default defineConfig({
         description: 'Turn Individual Clocking History PDFs into ready-to-use timesheet workbooks.',
         start_url: '/',
         display: 'standalone',
-        background_color: '#f2eefb',
-        theme_color: '#f2eefb',
+        background_color: '#f2f1ef',
+        theme_color: '#f2f1ef',
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
