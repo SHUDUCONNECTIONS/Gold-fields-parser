@@ -643,8 +643,8 @@ def write_timesheet_sheet(wb, meta, timesheet_df, work_days=None, hours_per_day=
     # Widths are sized for the widest of: the header text + its autofilter
     # dropdown arrow, the data it holds, and (for A/F) the row-3/4 and
     # summary-box labels that share those columns ("Employee Number",
-    # "Planned Hours", etc.) - not just the header text alone.
-    for c, w in enumerate([20, 12, 11, 12, 12, 16, 12, 16, 16, 26], start=1):
+    # "Overtime Pay (hours)", etc.) - not just the header text alone.
+    for c, w in enumerate([20, 12, 11, 12, 12, 24, 12, 16, 16, 26], start=1):
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.auto_filter.ref = f"A{header_row}:J{total_row - 1}"
 

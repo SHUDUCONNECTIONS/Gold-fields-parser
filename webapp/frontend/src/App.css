@@ -153,6 +153,35 @@
   color: var(--text-faint);
 }
 
+.week-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.week-option {
+  border: 1.5px solid var(--panel-border);
+  background: var(--queued-bg);
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.week-option:hover {
+  border-color: var(--accent-2);
+}
+
+.week-option-on {
+  background: var(--accent-grad);
+  color: #ffffff;
+  border-color: transparent;
+}
+
 .schedule-shift-row {
   display: flex;
   align-items: center;

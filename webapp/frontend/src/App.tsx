@@ -8,10 +8,10 @@ import ShiftPicker from "./ShiftPicker";
 import type { Job } from "./types";
 import { useInstallPrompt } from "./useInstallPrompt";
 
-// Days of the week aren't user-selectable - Shift/Planned are always guessed
-// off a fixed Mon-Fri working week (Sunday work is handled separately as
-// S/T regardless of this list).
-const WORK_DAYS = ["mon", "tue", "wed", "thu", "fri"];
+// The working week is Mon-Fri, optionally extended to include Saturday for
+// employees who are scheduled to work it (Sunday is never part of this -
+// Sunday work always goes to S/T regardless of schedule, see the parser).
+const BASE_WORK_DAYS = ["mon", "tue", "wed", "thu", "fri"];
 
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -40,6 +40,7 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [hoursPerDay, setHoursPerDay] = useState<number | null>(null);
+  const [includeSaturday, setIncludeSaturday] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
   const { canInstall, installed, promptInstall } = useInstallPrompt();
@@ -102,7 +103,7 @@ export default function App() {
 
       try {
         const result = await parseFile(job.file, {
-          workDays: WORK_DAYS,
+          workDays: includeSaturday ? [...BASE_WORK_DAYS, "sat"] : BASE_WORK_DAYS,
           hoursPerDay,
         });
         setJobs((prev) =>
@@ -213,6 +214,8 @@ export default function App() {
         <ScheduleSettings
           hoursPerDay={hoursPerDay}
           onChangeShift={() => setHoursPerDay(null)}
+          includeSaturday={includeSaturday}
+          onIncludeSaturdayChange={setIncludeSaturday}
         />
 
         {jobs.length > 0 && (
