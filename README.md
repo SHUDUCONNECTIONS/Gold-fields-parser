@@ -121,16 +121,23 @@ table with totals and a Planned/Actual/Overtime summary box.
   day in the report's date range gets a row, not just days with clockings.
 - **1st / 2nd** are that day's first and last clocking; **Hrs of work** is
   simply their difference.
-- **Shift and Planned hours are guessed from day-of-week** — there's no
-  roster in the source PDF, so this is a guess, not a fact, and it's still
-  wrong for anyone on a non-standard week (night shift, rotating roster,
-  part-time, etc.) no matter how it's configured.
-  - **CLI**: `--work-days mon,tue,wed,thu,fri` and `--hours-per-day 8`
+- **Shift and Planned hours are guessed**, since there's no roster in the
+  source PDF, one of two ways:
+  - **By day-of-week** (`--work-days`) — every day in the list gets
+    `--hours-per-day` planned hours, every other day is OFF. Still wrong for
+    anyone on a genuinely irregular week no matter how it's configured.
+  - **Rotating** (`--rotating`) — for shifts that don't follow a fixed
+    weekly pattern (e.g. 4-on/4-off): `--work-days` is ignored, and any day
+    with at least one clocking is treated as a scheduled `--hours-per-day`
+    day instead.
+  - **CLI**: `--work-days mon,tue,wed,thu,fri`, `--hours-per-day 8`, and/or
+    `--rotating`
   - **Desktop app**: day checkboxes + an hours field above the Parse button
-  - **Web app (local + Vercel)**: a Mon–Fri / Mon–Sat toggle (for employees
-    scheduled to work Saturdays) plus the planned shift length (10h/9h/8h
-    tiles) — Sunday work always counts as overtime regardless of this
-    schedule
+  - **Web app (local + Vercel)**: pick a planned shift length up front
+    (10h/9h/8h tiles). The 10h tile is treated as a rotating 4-on/4-off
+    shift; 9h and 8h follow a Mon–Fri / Mon–Sat toggle (for employees
+    scheduled to work Saturdays). Sunday work always counts as overtime
+    either way
 - **O/T Minutes** is any time worked beyond the planned daily hours on a
   non-Sunday, paid at **1.5x**. **S/T Minutes** ("Sunday Time") is all time
   worked on a Sunday, paid at **2.0x**, regardless of whether Sunday is a

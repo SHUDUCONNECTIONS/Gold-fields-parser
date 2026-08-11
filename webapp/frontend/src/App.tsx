@@ -41,6 +41,9 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [hoursPerDay, setHoursPerDay] = useState<number | null>(null);
   const [includeSaturday, setIncludeSaturday] = useState(false);
+  // The 10h shift is a rotating 4-on/4-off pattern, not a fixed weekly one -
+  // see ShiftPicker/ScheduleSettings and build_timesheet's `rotating` mode.
+  const rotating = hoursPerDay === 10;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
   const { canInstall, installed, promptInstall } = useInstallPrompt();
@@ -105,6 +108,7 @@ export default function App() {
         const result = await parseFile(job.file, {
           workDays: includeSaturday ? [...BASE_WORK_DAYS, "sat"] : BASE_WORK_DAYS,
           hoursPerDay,
+          rotating,
         });
         setJobs((prev) =>
           prev.map((j) =>
@@ -214,6 +218,7 @@ export default function App() {
         <ScheduleSettings
           hoursPerDay={hoursPerDay}
           onChangeShift={() => setHoursPerDay(null)}
+          rotating={rotating}
           includeSaturday={includeSaturday}
           onIncludeSaturdayChange={setIncludeSaturday}
         />

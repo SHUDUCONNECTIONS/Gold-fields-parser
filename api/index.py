@@ -61,6 +61,7 @@ async def parse_pdf(
     file: UploadFile,
     work_days: str = Form(default="mon,tue,wed,thu,fri"),
     hours_per_day: float = Form(default=parser.DEFAULT_HOURS_PER_DAY),
+    rotating: bool = Form(default=False),
 ):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only .pdf files are supported")
@@ -88,11 +89,16 @@ async def parse_pdf(
         full_daily = parser.build_daily_summary(df, meta["Date From"], meta["Date To"])
         shifts_df = parser.build_hours_worked(df)
         timesheet_df = parser.build_timesheet(
-            df, meta, work_days=parsed_work_days, hours_per_day=hours_per_day
+            df, meta, work_days=parsed_work_days, hours_per_day=hours_per_day, rotating=rotating
         )
 
         parser.build_workbook(
-            meta, timesheet_df, out_path, work_days=parsed_work_days, hours_per_day=hours_per_day
+            meta,
+            timesheet_df,
+            out_path,
+            work_days=parsed_work_days,
+            hours_per_day=hours_per_day,
+            rotating=rotating,
         )
 
         total_hours = float(shifts_df["Hours Worked"].sum())

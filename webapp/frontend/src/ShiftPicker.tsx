@@ -23,7 +23,8 @@ export default function ShiftPicker({ onSelect }: Props) {
       </div>
       <p className="shift-picker-hint">
         Time worked beyond this goes to overtime — Sunday work always does.
-        You can change this later.
+        The 10h shift is treated as a rotating 4-on/4-off pattern; 9h and 8h
+        follow a Mon–Fri (or Mon–Sat) week. You can change this later.
       </p>
     </main>
   );

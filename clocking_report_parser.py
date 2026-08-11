@@ -388,17 +388,25 @@ def describe_schedule(work_days, hours_per_day):
     return f"{span or 'no scheduled days'}, {hours_per_day:g}h/day"
 
 
-def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY):
+def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY, rotating=False):
     """Builds the day-by-day timesheet table (Day/Date/Shift/1st/2nd/Hrs of
     work/Planned/O-T Minutes/S-T Minutes/Comments) shown in the target report
     layout. One row per calendar day in the report's date range.
 
-    Shift/Planned are assigned by day-of-week only: `work_days` (a set of
-    weekday() indices, Monday=0..Sunday=6; default Mon-Fri) get "D/S" with
-    `hours_per_day` planned hours, every other day gets "OFF" with no
-    planned hours - this does NOT read an actual roster, since none is
-    available in the source PDF. Configure `work_days`/`hours_per_day` to
-    match the company's normal schedule if it isn't a plain Mon-Fri week.
+    Shift/Planned are assigned one of two ways, since there's no roster in
+    the source PDF either way:
+
+    - `rotating=False` (default): by day-of-week. `work_days` (a set of
+      weekday() indices, Monday=0..Sunday=6; default Mon-Fri) get "D/S" with
+      `hours_per_day` planned hours, every other day gets "OFF" with no
+      planned hours. Configure `work_days`/`hours_per_day` to match the
+      company's normal schedule if it isn't a plain Mon-Fri week.
+    - `rotating=True`: for shifts that don't follow a fixed weekly pattern
+      (e.g. 4-on/4-off) - `work_days` is ignored, and instead every day with
+      at least one clocking is treated as a scheduled `hours_per_day` day
+      (every day with no clocking is OFF). This can't tell a genuine rest
+      day from a missed clocking, but a day-of-week guess would be no more
+      accurate for a rotation that isn't tied to the calendar week.
 
     1st/2nd are the first and last clocking of the day (any type), and
     Hrs of work is simply their difference, matching the reference layout.
@@ -409,7 +417,7 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     Sunday is a scheduled day or how many hours were planned - Sunday work
     never counts toward O/T Minutes.
     """
-    if work_days is None:
+    if not rotating and work_days is None:
         work_days = DEFAULT_WORK_DAYS
 
     start = datetime.strptime(meta["Date From"], "%Y-%m-%d")
@@ -421,7 +429,7 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     cur = start
     while cur <= end:
         date_str = cur.strftime("%Y-%m-%d")
-        is_scheduled = cur.weekday() in work_days
+        is_scheduled = date_str in span.index if rotating else cur.weekday() in work_days
 
         if date_str in span.index:
             first_dt = span.loc[date_str, "First"]
@@ -494,7 +502,9 @@ def style_header_row(ws, headers, row=1):
         cell.border = BORDER
 
 
-def write_timesheet_sheet(wb, meta, timesheet_df, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY):
+def write_timesheet_sheet(
+    wb, meta, timesheet_df, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY, rotating=False
+):
     ws = wb.active
     ws.title = "Timesheet"
 
@@ -622,16 +632,26 @@ def write_timesheet_sheet(wb, meta, timesheet_df, work_days=None, hours_per_day=
     ws.cell(row=box_row + 3, column=6, value="Overtime Pay (hours)").font = LABEL_FONT
     ws.cell(row=box_row + 3, column=7, value=paid_overtime_hours).number_format = "0.00 \"h\""
 
-    schedule_desc = describe_schedule(work_days or DEFAULT_WORK_DAYS, hours_per_day)
+    if rotating:
+        schedule_note = (
+            f"'Shift'/'Planned' follow a rotating {hours_per_day:g}h/day shift (e.g. "
+            "4-on/4-off) - any day with a clocking is treated as scheduled, since a "
+            "rotation isn't tied to the calendar week and there's no roster to check "
+            "against."
+        )
+    else:
+        schedule_desc = describe_schedule(work_days or DEFAULT_WORK_DAYS, hours_per_day)
+        schedule_note = (
+            f"'Shift'/'Planned' are assigned by day-of-week ({schedule_desc}, all "
+            "other days = OFF), not an actual roster."
+        )
     note_row = box_row + 5
     note = ws.cell(
         row=note_row, column=1,
         value=(
             "Note: Overtime Hours = O/T Minutes (time worked beyond the planned daily "
             "hours) + S/T Minutes (all time worked on a Sunday). Overtime Pay (hours) = "
-            f"O/T Minutes x {OT_RATE:g} + S/T Minutes x {ST_RATE:g}. "
-            f"'Shift'/'Planned' are assigned by day-of-week ({schedule_desc}, all "
-            "other days = OFF), not an actual roster."
+            f"O/T Minutes x {OT_RATE:g} + S/T Minutes x {ST_RATE:g}. " + schedule_note
         ),
     )
     note.font = Font(name="Arial", size=9, italic=True, color="555555")
@@ -649,9 +669,13 @@ def write_timesheet_sheet(wb, meta, timesheet_df, work_days=None, hours_per_day=
     ws.auto_filter.ref = f"A{header_row}:J{total_row - 1}"
 
 
-def build_workbook(meta, timesheet_df, out_path, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY):
+def build_workbook(
+    meta, timesheet_df, out_path, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY, rotating=False
+):
     wb = Workbook()
-    write_timesheet_sheet(wb, meta, timesheet_df, work_days=work_days, hours_per_day=hours_per_day)
+    write_timesheet_sheet(
+        wb, meta, timesheet_df, work_days=work_days, hours_per_day=hours_per_day, rotating=rotating
+    )
     wb.save(out_path)
 
 
@@ -659,12 +683,14 @@ def build_workbook(meta, timesheet_df, out_path, work_days=None, hours_per_day=D
 # Main
 # ----------------------------------------------------------------------------
 
-def process_one(pdf_path, out_path, log=print, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY):
+def process_one(
+    pdf_path, out_path, log=print, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY, rotating=False
+):
     """Parses a single Individual Clocking History PDF and writes its workbook.
     Raises on failure (caller decides whether to keep going in a batch).
 
-    `work_days`/`hours_per_day` configure the guessed Shift/Planned schedule
-    (see build_timesheet) - default Mon-Fri, 8h/day."""
+    `work_days`/`hours_per_day`/`rotating` configure the guessed Shift/Planned
+    schedule (see build_timesheet) - default Mon-Fri, 8h/day, not rotating."""
     log(f"Parsing {pdf_path} ...")
     meta, records = parse_pdf(str(pdf_path))
     if not records:
@@ -673,9 +699,13 @@ def process_one(pdf_path, out_path, log=print, work_days=None, hours_per_day=DEF
     df = build_dataframe(records)
     full_daily = build_daily_summary(df, meta["Date From"], meta["Date To"])
     shifts_df = build_hours_worked(df)
-    timesheet_df = build_timesheet(df, meta, work_days=work_days, hours_per_day=hours_per_day)
+    timesheet_df = build_timesheet(
+        df, meta, work_days=work_days, hours_per_day=hours_per_day, rotating=rotating
+    )
 
-    build_workbook(meta, timesheet_df, out_path, work_days=work_days, hours_per_day=hours_per_day)
+    build_workbook(
+        meta, timesheet_df, out_path, work_days=work_days, hours_per_day=hours_per_day, rotating=rotating
+    )
 
     total_hours = shifts_df["Hours Worked"].sum()
     log(f"Parsed {len(records)} clocking events across {full_daily.shape[0]} calendar days.")
@@ -683,15 +713,22 @@ def process_one(pdf_path, out_path, log=print, work_days=None, hours_per_day=DEF
     log(f"Workbook written to: {out_path}")
 
 
-def run_batch(input_paths, output_dir=None, log=print, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY):
+def run_batch(
+    input_paths,
+    output_dir=None,
+    log=print,
+    work_days=None,
+    hours_per_day=DEFAULT_HOURS_PER_DAY,
+    rotating=False,
+):
     """Shared entry point for both the CLI and the GUI app.
 
     `input_paths` is a list of files and/or folders (folders are expanded to
     every *.pdf inside them). Each PDF is parsed independently - one failure
     is logged and skipped rather than aborting the rest.
 
-    `work_days`/`hours_per_day` configure the guessed Shift/Planned schedule
-    (see build_timesheet) - default Mon-Fri, 8h/day.
+    `work_days`/`hours_per_day`/`rotating` configure the guessed Shift/Planned
+    schedule (see build_timesheet) - default Mon-Fri, 8h/day, not rotating.
 
     Returns (ok, failed) where `ok` is a list of (pdf_path, out_path) and
     `failed` is a list of (pdf_path, error_message).
@@ -714,7 +751,9 @@ def run_batch(input_paths, output_dir=None, log=print, work_days=None, hours_per
             f.stem + "_parsed.xlsx"
         )
         try:
-            process_one(f, out_path, log=log, work_days=work_days, hours_per_day=hours_per_day)
+            process_one(
+                f, out_path, log=log, work_days=work_days, hours_per_day=hours_per_day, rotating=rotating
+            )
             ok.append((f, out_path))
         except Exception as e:
             log(f"  FAILED: {f.name}: {e}")
@@ -754,6 +793,13 @@ def main():
         default=DEFAULT_HOURS_PER_DAY,
         help=f"Planned hours for each scheduled working day (default: {DEFAULT_HOURS_PER_DAY:g}).",
     )
+    ap.add_argument(
+        "--rotating",
+        action="store_true",
+        help="Use for shifts that don't follow a fixed weekly pattern (e.g. 4-on/4-off): "
+        "ignores --work-days and instead treats any day with a clocking as a scheduled "
+        "--hours-per-day day.",
+    )
     args = ap.parse_args()
 
     try:
@@ -768,7 +814,11 @@ def main():
     if pdf_path.is_dir():
         out_dir = Path(args.output_xlsx) if args.output_xlsx else None
         ok, failed = run_batch(
-            [pdf_path], output_dir=out_dir, work_days=work_days, hours_per_day=args.hours_per_day
+            [pdf_path],
+            output_dir=out_dir,
+            work_days=work_days,
+            hours_per_day=args.hours_per_day,
+            rotating=args.rotating,
         )
         if not ok and not failed:
             sys.exit(f"No .pdf files found in {pdf_path}")
@@ -782,7 +832,9 @@ def main():
     out_path = Path(args.output_xlsx) if args.output_xlsx else pdf_path.with_name(
         pdf_path.stem + "_parsed.xlsx"
     )
-    process_one(pdf_path, out_path, work_days=work_days, hours_per_day=args.hours_per_day)
+    process_one(
+        pdf_path, out_path, work_days=work_days, hours_per_day=args.hours_per_day, rotating=args.rotating
+    )
 
 
 if __name__ == "__main__":

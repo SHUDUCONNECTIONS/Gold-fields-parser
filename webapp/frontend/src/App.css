@@ -153,6 +153,12 @@
   color: var(--text-faint);
 }
 
+.schedule-rotating-note {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
 .week-toggle {
   display: flex;
   gap: 6px;

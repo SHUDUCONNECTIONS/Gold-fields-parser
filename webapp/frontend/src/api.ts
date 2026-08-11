@@ -4,12 +4,13 @@ const API_BASE = "/api";
 
 export async function parseFile(
   file: File,
-  schedule: { workDays: string[]; hoursPerDay: number }
+  schedule: { workDays: string[]; hoursPerDay: number; rotating: boolean }
 ): Promise<ParseResult> {
   const form = new FormData();
   form.append("file", file);
   form.append("work_days", schedule.workDays.join(","));
   form.append("hours_per_day", String(schedule.hoursPerDay));
+  form.append("rotating", String(schedule.rotating));
 
   const res = await fetch(`${API_BASE}/parse`, {
     method: "POST",
