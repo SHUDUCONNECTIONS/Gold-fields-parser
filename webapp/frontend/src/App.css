@@ -183,29 +183,52 @@
   border-color: transparent;
 }
 
-.schedule-hours {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-dim);
+.schedule-hours-label {
+  margin-top: 4px;
 }
 
-.schedule-hours input {
-  width: 64px;
-  padding: 7px 10px;
-  border-radius: 10px;
+.hour-tiles {
+  display: flex;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.hour-tile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   border: 1.5px solid var(--panel-border);
   background: var(--queued-bg);
-  color: var(--text);
+  color: var(--text-dim);
   font-family: inherit;
-  font-size: 13px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.12s ease;
 }
 
-.schedule-hours input:focus {
-  outline: none;
+.hour-tile:hover {
   border-color: var(--accent-2);
+}
+
+.hour-tile-on {
+  background: var(--accent-grad);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.hour-tile-value {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.hour-tile-unit {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
 }
 
 /* ---------- Toolbar ---------- */

@@ -129,9 +129,11 @@ table with totals and a Planned/Actual/Overtime summary box.
   - **CLI**: `--work-days mon,tue,wed,thu,fri` and `--hours-per-day 8`
   - **Desktop app**: day checkboxes + an hours field above the Parse button
   - **Web app (local + Vercel)**: the same controls under the drop zone
-- **O/T Minutes and S/T Minutes** (the 1.5x/2.0x overtime split) are left
-  blank — that requires the employer's actual payroll policy, not just clock
-  times.
+- **O/T Minutes** is any time worked beyond the planned daily hours on a
+  non-Sunday, paid at **1.5x**. **S/T Minutes** ("Sunday Time") is all time
+  worked on a Sunday, paid at **2.0x**, regardless of whether Sunday is a
+  scheduled day — Sunday work never counts toward O/T Minutes. The summary
+  box's **Overtime Pay (hours)** = `O/T Minutes x 1.5 + S/T Minutes x 2.0`.
 
 ## How it works
 

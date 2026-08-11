@@ -1,3 +1,5 @@
+const HOURS_OPTIONS = [10, 9, 8];
+
 const DAYS: { abbr: string; label: string }[] = [
   { abbr: "mon", label: "Mon" },
   { abbr: "tue", label: "Tue" },
@@ -42,17 +44,27 @@ export default function ScheduleSettings({
           </button>
         ))}
       </div>
-      <label className="schedule-hours">
-        Hours per scheduled day
-        <input
-          type="number"
-          min={0}
-          max={24}
-          step={0.5}
-          value={hoursPerDay}
-          onChange={(e) => onHoursPerDayChange(Number(e.target.value))}
-        />
-      </label>
+      <p className="schedule-label schedule-hours-label">
+        Planned hours per scheduled day
+        <span className="schedule-hint">
+          {" "}
+          — time worked beyond this goes to overtime; Sunday work always
+          does
+        </span>
+      </p>
+      <div className="hour-tiles">
+        {HOURS_OPTIONS.map((h) => (
+          <button
+            key={h}
+            type="button"
+            className={`hour-tile ${hoursPerDay === h ? "hour-tile-on" : ""}`}
+            onClick={() => onHoursPerDayChange(h)}
+          >
+            <span className="hour-tile-value">{h}</span>
+            <span className="hour-tile-unit">hours</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

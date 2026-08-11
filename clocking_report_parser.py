@@ -357,6 +357,11 @@ WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 DEFAULT_WORK_DAYS = frozenset({0, 1, 2, 3, 4})
 DEFAULT_HOURS_PER_DAY = 8.0
 
+# Payroll multipliers applied to O/T Minutes and S/T Minutes to get paid
+# overtime hours (see write_timesheet_sheet's "Overtime Pay" summary line).
+OT_RATE = 1.5
+ST_RATE = 2.0
+
 
 def parse_work_days(spec):
     """Parses a comma-separated weekday spec like "mon,tue,wed,thu,fri" into
@@ -398,9 +403,11 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     1st/2nd are the first and last clocking of the day (any type), and
     Hrs of work is simply their difference, matching the reference layout.
 
-    O/T Minutes and S/T Minutes (the 1.5x / 2.0x overtime split) are left
-    blank: splitting overtime between those buckets requires the payroll
-    policy's actual rule, which isn't derivable from clocking data alone.
+    O/T Minutes (1.5x) is any time worked beyond `hours_per_day` on a
+    non-Sunday - e.g. staying past a planned 8h shift. S/T Minutes (2.0x,
+    "Sunday Time") is ALL time worked on a Sunday, regardless of whether
+    Sunday is a scheduled day or how many hours were planned - Sunday work
+    never counts toward O/T Minutes.
     """
     if work_days is None:
         work_days = DEFAULT_WORK_DAYS
@@ -429,6 +436,18 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
         elif not is_scheduled and first_dt is not None:
             comment = "Worked on OFF day"
 
+        is_sunday = cur.weekday() == WEEKDAY_ABBR["sun"]
+        planned = timedelta(hours=hours_per_day) if is_scheduled else None
+
+        if hrs_of_work is None:
+            ot_minutes = st_minutes = None
+        elif is_sunday:
+            ot_minutes, st_minutes = None, hrs_of_work
+        else:
+            excess = hrs_of_work - (planned or timedelta())
+            ot_minutes = excess if excess > timedelta() else None
+            st_minutes = None
+
         rows.append(
             {
                 "Day": cur.strftime("%A"),
@@ -437,9 +456,9 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
                 "1st": first_dt.time() if first_dt is not None else None,
                 "2nd": last_dt.time() if last_dt is not None else None,
                 "Hrs of work": hrs_of_work,
-                "Planned": timedelta(hours=hours_per_day) if is_scheduled else None,
-                "O/T Minutes": None,
-                "S/T Minutes": None,
+                "Planned": planned,
+                "O/T Minutes": ot_minutes,
+                "S/T Minutes": st_minutes,
                 "Comments": comment,
                 "Is Off": not is_scheduled,
             }
@@ -577,39 +596,48 @@ def write_timesheet_sheet(wb, meta, timesheet_df, work_days=None, hours_per_day=
         ws.cell(row=total_row, column=c).border = BORDER
 
     planned_total, actual_total = totals[7], totals[6]
-    overtime_total = (
-        actual_total - planned_total
-        if actual_total is not None and planned_total is not None
-        else None
-    )
+    # Overtime = sum of the daily O/T + S/T Minutes columns, not Actual -
+    # Planned - a net figure would let an under-worked day cancel out
+    # overtime earned on another day, which isn't how overtime pay works.
+    overtime_total = sum_timedeltas((totals[8], totals[9]))
 
     box_row = total_row + 3
     ws.cell(row=box_row, column=6, value="Planned Hours").font = LABEL_FONT
     ws.cell(row=box_row, column=7, value=planned_total).number_format = "[h]:mm"
     ws.cell(row=box_row + 1, column=6, value="Actual Hours").font = LABEL_FONT
     ws.cell(row=box_row + 1, column=7, value=actual_total).number_format = "[h]:mm"
-    ws.cell(row=box_row + 2, column=6, value="Overtime").font = LABEL_FONT
-    # Unlike Planned/Actual (always >= 0), Overtime can be negative (under-
-    # worked vs planned) - Excel's "[h]:mm" elapsed-time format can't render
-    # negative durations (shows as ####), so this is decimal hours instead,
-    # which handles negative values fine.
+    ws.cell(row=box_row + 2, column=6, value="Overtime Hours").font = LABEL_FONT
     overtime_hours = overtime_total.total_seconds() / 3600 if overtime_total is not None else None
     ws.cell(row=box_row + 2, column=7, value=overtime_hours).number_format = "0.00 \"h\""
+
+    # Paid overtime hours - O/T and S/T are worked at different rates, so
+    # they're weighted separately rather than multiplying the flat total.
+    ot_hours = totals[8].total_seconds() / 3600 if totals[8] is not None else 0.0
+    st_hours = totals[9].total_seconds() / 3600 if totals[9] is not None else 0.0
+    paid_overtime_hours = (
+        ot_hours * OT_RATE + st_hours * ST_RATE
+        if totals[8] is not None or totals[9] is not None
+        else None
+    )
+    ws.cell(row=box_row + 3, column=6, value="Overtime Pay (hours)").font = LABEL_FONT
+    ws.cell(row=box_row + 3, column=7, value=paid_overtime_hours).number_format = "0.00 \"h\""
+
     schedule_desc = describe_schedule(work_days or DEFAULT_WORK_DAYS, hours_per_day)
+    note_row = box_row + 5
     note = ws.cell(
-        row=box_row + 4, column=1,
+        row=note_row, column=1,
         value=(
-            "Note: Overtime = Actual Hours - Planned Hours. O/T Minutes, S/T Minutes and "
-            "the O/T 1,5 / O/T 2,0 split are not computed - the payroll rule for dividing "
-            "overtime between the 1.5x and 2.0x buckets isn't derivable from clocking data "
-            f"alone. 'Shift'/'Planned' are assigned by day-of-week ({schedule_desc}, all "
+            "Note: Overtime Hours = O/T Minutes (time worked beyond the planned daily "
+            "hours) + S/T Minutes (all time worked on a Sunday). Overtime Pay (hours) = "
+            f"O/T Minutes x {OT_RATE:g} + S/T Minutes x {ST_RATE:g}. "
+            f"'Shift'/'Planned' are assigned by day-of-week ({schedule_desc}, all "
             "other days = OFF), not an actual roster."
         ),
     )
     note.font = Font(name="Arial", size=9, italic=True, color="555555")
-    ws.merge_cells(start_row=box_row + 4, start_column=1, end_row=box_row + 4, end_column=10)
+    ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=10)
     note.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.row_dimensions[box_row + 4].height = 30
+    ws.row_dimensions[note_row].height = 30
 
     ws.freeze_panes = f"A{first_data_row}"
     # Widths are sized for the widest of: the header text + its autofilter
