@@ -4,6 +4,7 @@ import { downloadResult, parseFile } from "./api";
 import ramsLogo from "./assets/rams-logo.png";
 import Blobs from "./Blobs";
 import ScheduleSettings from "./ScheduleSettings";
+import ShiftPicker from "./ShiftPicker";
 import type { Job } from "./types";
 import { useInstallPrompt } from "./useInstallPrompt";
 
@@ -36,7 +37,7 @@ export default function App() {
   const [workDays, setWorkDays] = useState(
     () => new Set(["mon", "tue", "wed", "thu", "fri"])
   );
-  const [hoursPerDay, setHoursPerDay] = useState(8);
+  const [hoursPerDay, setHoursPerDay] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
   const { canInstall, installed, promptInstall } = useInstallPrompt();
@@ -94,6 +95,7 @@ export default function App() {
   const clearAll = () => setJobs([]);
 
   const runQueue = async () => {
+    if (hoursPerDay === null) return;
     if (workDays.size === 0) {
       alert("Tick at least one scheduled working day first.");
       return;
@@ -174,6 +176,9 @@ export default function App() {
         {installed && <p className="installed-note">✓ Installed as an app</p>}
       </header>
 
+      {hoursPerDay === null ? (
+        <ShiftPicker onSelect={setHoursPerDay} />
+      ) : (
       <main className="panel">
         <div
           className={`dropzone ${isDragging ? "dropzone-active" : ""}`}
@@ -220,7 +225,7 @@ export default function App() {
           workDays={workDays}
           onToggleDay={toggleWorkDay}
           hoursPerDay={hoursPerDay}
-          onHoursPerDayChange={setHoursPerDay}
+          onChangeShift={() => setHoursPerDay(null)}
         />
 
         {jobs.length > 0 && (
@@ -295,6 +300,7 @@ export default function App() {
           </>
         )}
       </main>
+      )}
 
       <footer className="footer">
         Uploaded PDFs are parsed and discarded — nothing is stored afterward.

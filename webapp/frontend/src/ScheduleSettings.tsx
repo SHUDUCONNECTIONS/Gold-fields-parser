@@ -1,5 +1,3 @@
-const HOURS_OPTIONS = [10, 9, 8];
-
 const DAYS: { abbr: string; label: string }[] = [
   { abbr: "mon", label: "Mon" },
   { abbr: "tue", label: "Tue" },
@@ -14,14 +12,14 @@ interface Props {
   workDays: Set<string>;
   onToggleDay: (abbr: string) => void;
   hoursPerDay: number;
-  onHoursPerDayChange: (hours: number) => void;
+  onChangeShift: () => void;
 }
 
 export default function ScheduleSettings({
   workDays,
   onToggleDay,
   hoursPerDay,
-  onHoursPerDayChange,
+  onChangeShift,
 }: Props) {
   return (
     <div className="schedule">
@@ -44,27 +42,12 @@ export default function ScheduleSettings({
           </button>
         ))}
       </div>
-      <p className="schedule-label schedule-hours-label">
-        Planned hours per scheduled day
-        <span className="schedule-hint">
-          {" "}
-          — time worked beyond this goes to overtime; Sunday work always
-          does
-        </span>
+      <p className="schedule-shift-row">
+        Planned shift <strong>{hoursPerDay}h</strong>/day
+        <button type="button" className="link-btn" onClick={onChangeShift}>
+          Change
+        </button>
       </p>
-      <div className="hour-tiles">
-        {HOURS_OPTIONS.map((h) => (
-          <button
-            key={h}
-            type="button"
-            className={`hour-tile ${hoursPerDay === h ? "hour-tile-on" : ""}`}
-            onClick={() => onHoursPerDayChange(h)}
-          >
-            <span className="hour-tile-value">{h}</span>
-            <span className="hour-tile-unit">hours</span>
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

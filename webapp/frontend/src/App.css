@@ -183,52 +183,88 @@
   border-color: transparent;
 }
 
-.schedule-hours-label {
-  margin-top: 4px;
-}
-
-.hour-tiles {
+.schedule-shift-row {
   display: flex;
-  gap: 8px;
-  max-width: 320px;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
 }
 
-.hour-tile {
+.link-btn {
+  border: none;
+  background: none;
+  color: var(--accent-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Shift picker (big tiles) ---------- */
+
+.shift-picker-label {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.shift-tiles {
+  display: flex;
+  gap: 12px;
+}
+
+.shift-tile {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
+  justify-content: center;
+  gap: 4px;
   border: 1.5px solid var(--panel-border);
   background: var(--queued-bg);
-  color: var(--text-dim);
+  color: var(--text);
   font-family: inherit;
-  padding: 10px 8px;
-  border-radius: 12px;
+  padding: 30px 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.15s ease;
 }
 
-.hour-tile:hover {
-  border-color: var(--accent-2);
-}
-
-.hour-tile-on {
+.shift-tile:hover {
+  border-color: transparent;
   background: var(--accent-grad);
   color: #ffffff;
-  border-color: transparent;
+  transform: translateY(-3px);
+  box-shadow: 0 16px 28px -16px #00000040;
 }
 
-.hour-tile-value {
-  font-size: 19px;
+.shift-tile-value {
+  font-size: 38px;
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1;
 }
 
-.hour-tile-unit {
-  font-size: 11px;
+.shift-tile-unit {
+  font-size: 12.5px;
   font-weight: 600;
   opacity: 0.85;
+}
+
+.shift-picker-hint {
+  margin: 18px 0 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  text-align: center;
+  line-height: 1.5;
 }
 
 /* ---------- Toolbar ---------- */
