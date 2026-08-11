@@ -1,4 +1,3 @@
-import { AuthError, getStoredPassword } from "./auth";
 import type { ParseResult } from "./types";
 
 const API_BASE = "/api";
@@ -12,14 +11,11 @@ export async function parseFile(
   form.append("work_days", schedule.workDays.join(","));
   form.append("hours_per_day", String(schedule.hoursPerDay));
 
-  const password = getStoredPassword();
   const res = await fetch(`${API_BASE}/parse`, {
     method: "POST",
-    headers: password ? { Authorization: `Bearer ${password}` } : {},
     body: form,
   });
 
-  if (res.status === 401) throw new AuthError();
   if (!res.ok) {
     throw new Error(`Server error (${res.status})`);
   }

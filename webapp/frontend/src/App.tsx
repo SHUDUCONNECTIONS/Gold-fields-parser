@@ -2,9 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import "./App.css";
 import { downloadResult, parseFile } from "./api";
 import ramsLogo from "./assets/rams-logo.png";
-import { AuthError, clearStoredPassword, getStoredPassword } from "./auth";
 import Blobs from "./Blobs";
-import Login from "./Login";
 import ScheduleSettings from "./ScheduleSettings";
 import type { Job } from "./types";
 import { useInstallPrompt } from "./useInstallPrompt";
@@ -32,7 +30,6 @@ function StatusBadge({ status }: { status: Job["status"] }) {
 }
 
 export default function App() {
-  const [authed, setAuthed] = useState(() => !!getStoredPassword());
   const [jobs, setJobs] = useState<Job[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -123,14 +120,6 @@ export default function App() {
           )
         );
       } catch (e) {
-        if (e instanceof AuthError) {
-          // Password was cleared/changed server-side - bounce back to the
-          // login screen instead of grinding through the rest of the queue.
-          clearStoredPassword();
-          setAuthed(false);
-          setIsRunning(false);
-          return;
-        }
         setJobs((prev) =>
           prev.map((j) =>
             j.clientId === id
@@ -156,10 +145,6 @@ export default function App() {
     }
     setIsRunning(false);
   };
-
-  if (!authed) {
-    return <Login onSuccess={() => setAuthed(true)} />;
-  }
 
   const downloadAll = () => {
     for (const j of jobs) {

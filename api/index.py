@@ -8,20 +8,18 @@ across requests/instances - so /api/parse does everything in ONE request:
 parse the uploaded PDF and hand back the finished .xlsx inline (base64) in
 the same JSON response, rather than a two-step upload-then-download.
 
-Access is gated by a single shared password (APP_PASSWORD env var, set in
-the Vercel project settings) sent as `Authorization: Bearer <password>` on
-protected requests. If APP_PASSWORD isn't set at all (e.g. local dev without
-configuring it), the gate is skipped rather than locking everyone out.
+No auth gate: nothing is ever written to persistent storage (a PDF is
+parsed and gone once the response is sent), so there's no stored data to
+protect - anyone with the URL can use the tool.
 """
 
 import base64
-import os
 import sys
 import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -41,30 +39,9 @@ app.add_middleware(
 )
 
 
-def require_password(authorization: str | None):
-    expected = os.environ.get("APP_PASSWORD")
-    if not expected:
-        return  # no password configured - gate disabled (local dev)
-    token = (authorization or "").removeprefix("Bearer ").strip()
-    if token != expected:
-        raise HTTPException(401, "Wrong or missing password")
-
-
-class LoginRequest(BaseModel):
-    password: str
-
-
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
-
-
-@app.post("/api/login")
-def login(body: LoginRequest):
-    expected = os.environ.get("APP_PASSWORD")
-    if expected and body.password != expected:
-        raise HTTPException(401, "Wrong password")
-    return {"ok": True}
 
 
 class ParseResult(BaseModel):
@@ -82,12 +59,9 @@ class ParseResult(BaseModel):
 @app.post("/api/parse", response_model=ParseResult)
 async def parse_pdf(
     file: UploadFile,
-    authorization: str | None = Header(default=None),
     work_days: str = Form(default="mon,tue,wed,thu,fri"),
     hours_per_day: float = Form(default=parser.DEFAULT_HOURS_PER_DAY),
 ):
-    require_password(authorization)
-
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only .pdf files are supported")
     try:

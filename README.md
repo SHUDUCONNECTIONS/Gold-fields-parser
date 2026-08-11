@@ -25,16 +25,13 @@ reuses `clocking_report_parser.py` — see `vercel.json` for the build wiring.
    [vercel.com](https://vercel.com)).
 2. From the project root: `vercel` (first deploy — follow the prompts,
    accepting defaults is fine) then `vercel --prod` to publish it.
-3. In the Vercel dashboard for the project → **Settings → Environment
-   Variables**, add `APP_PASSWORD` with whatever shared password the company
-   should use to get in, then redeploy (`vercel --prod`) so it picks it up.
-   Without this variable set, the app is **open to anyone with the URL** —
-   don't skip it.
 
 After that, share the deployed URL (shown after `vercel --prod`) with the
-company. They open it, enter the password once (it's remembered after
-that), and use the app exactly like the local version — drag PDFs in, hit
-Parse, download.
+company. They open it and use the app exactly like the local version — drag
+PDFs in, hit Parse, download. There's no login: nothing is ever written to
+persistent storage (a PDF is parsed and discarded once the response is
+sent), so there's no stored data to gate access to — anyone with the URL
+can use the tool.
 
 **How it differs from local:** each `/api/parse` call now does the upload,
 parse, and workbook generation in one request and hands back the `.xlsx`
