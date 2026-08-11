@@ -153,41 +153,11 @@
   color: var(--text-faint);
 }
 
-.schedule-days {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.day-chip {
-  border: 1.5px solid var(--panel-border);
-  background: var(--queued-bg);
-  color: var(--text-faint);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 6px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-
-.day-chip:hover {
-  border-color: var(--accent-2);
-}
-
-.day-chip-on {
-  background: var(--accent-grad);
-  color: #ffffff;
-  border-color: transparent;
-}
-
 .schedule-shift-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0;
+  margin: 8px 0 0;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-dim);

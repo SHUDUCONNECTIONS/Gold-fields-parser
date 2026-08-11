@@ -8,6 +8,11 @@ import ShiftPicker from "./ShiftPicker";
 import type { Job } from "./types";
 import { useInstallPrompt } from "./useInstallPrompt";
 
+// Days of the week aren't user-selectable - Shift/Planned are always guessed
+// off a fixed Mon-Fri working week (Sunday work is handled separately as
+// S/T regardless of this list).
+const WORK_DAYS = ["mon", "tue", "wed", "thu", "fri"];
+
 function makeId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -34,22 +39,10 @@ export default function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const [workDays, setWorkDays] = useState(
-    () => new Set(["mon", "tue", "wed", "thu", "fri"])
-  );
   const [hoursPerDay, setHoursPerDay] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
   const { canInstall, installed, promptInstall } = useInstallPrompt();
-
-  const toggleWorkDay = (abbr: string) => {
-    setWorkDays((prev) => {
-      const next = new Set(prev);
-      if (next.has(abbr)) next.delete(abbr);
-      else next.add(abbr);
-      return next;
-    });
-  };
 
   const addFiles = useCallback((fileList: FileList | File[]) => {
     const pdfs = Array.from(fileList).filter((f) =>
@@ -96,10 +89,6 @@ export default function App() {
 
   const runQueue = async () => {
     if (hoursPerDay === null) return;
-    if (workDays.size === 0) {
-      alert("Tick at least one scheduled working day first.");
-      return;
-    }
     setIsRunning(true);
     // Snapshot the ids to run so newly-added files mid-run aren't swept in.
     const toRun = jobs.filter((j) => j.status === "queued").map((j) => j.clientId);
@@ -113,7 +102,7 @@ export default function App() {
 
       try {
         const result = await parseFile(job.file, {
-          workDays: Array.from(workDays),
+          workDays: WORK_DAYS,
           hoursPerDay,
         });
         setJobs((prev) =>
@@ -222,8 +211,6 @@ export default function App() {
         </div>
 
         <ScheduleSettings
-          workDays={workDays}
-          onToggleDay={toggleWorkDay}
           hoursPerDay={hoursPerDay}
           onChangeShift={() => setHoursPerDay(null)}
         />

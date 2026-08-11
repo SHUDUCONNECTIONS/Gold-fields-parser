@@ -124,11 +124,12 @@ table with totals and a Planned/Actual/Overtime summary box.
 - **Shift and Planned hours are guessed from day-of-week** — there's no
   roster in the source PDF, so this is a guess, not a fact, and it's still
   wrong for anyone on a non-standard week (night shift, rotating roster,
-  part-time, etc.) no matter how it's configured. The schedule itself
-  *is* configurable rather than hardcoded to Mon–Fri/8h:
+  part-time, etc.) no matter how it's configured.
   - **CLI**: `--work-days mon,tue,wed,thu,fri` and `--hours-per-day 8`
   - **Desktop app**: day checkboxes + an hours field above the Parse button
-  - **Web app (local + Vercel)**: the same controls under the drop zone
+  - **Web app (local + Vercel)**: fixed to a Mon–Fri week; the only choice
+    the user makes is the planned shift length (10h/9h/8h tiles) up front —
+    Sunday work always counts as overtime regardless of this schedule
 - **O/T Minutes** is any time worked beyond the planned daily hours on a
   non-Sunday, paid at **1.5x**. **S/T Minutes** ("Sunday Time") is all time
   worked on a Sunday, paid at **2.0x**, regardless of whether Sunday is a
