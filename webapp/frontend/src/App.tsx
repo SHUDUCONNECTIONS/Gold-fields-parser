@@ -254,6 +254,15 @@ export default function App() {
               </div>
             </div>
 
+            {okCount > 0 && (
+              <p className="hint-note">
+                First time opening a downloaded workbook? Excel may open it in
+                "Protected View" since it came from the browser — click{" "}
+                <strong>Enable Editing</strong> in the yellow banner at the
+                top to edit it.
+              </p>
+            )}
+
             <ul className="job-list">
               {jobs.map((job) => (
                 <li key={job.clientId} className={`job-row job-${job.status}`}>

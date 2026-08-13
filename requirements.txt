@@ -1,4 +1,5 @@
 pdfplumber
+pikepdf
 pandas
 openpyxl
 tkinterdnd2

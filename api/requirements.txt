@@ -1,5 +1,6 @@
 fastapi
 pdfplumber
+pikepdf
 pandas
 openpyxl
 python-multipart

@@ -66,13 +66,16 @@ below.
 
 import argparse
 import json
+import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pdfplumber
+import pikepdf
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -112,7 +115,7 @@ OUT_FIELD_BOUNDS = [
 ]
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+TIME_RE = re.compile(r"^\d{2}:\d{2}(:\d{2})?$")
 
 SKIP_LINE_SUBSTRINGS = [
     "Program - web_clock_report_individual",
@@ -194,16 +197,50 @@ def parse_metadata(first_page_text):
     return meta
 
 
+def _open_pdf(pdf_path):
+    """Open pdf_path with pdfplumber, transparently repairing malformed PDFs
+    via pikepdf/qpdf if the first attempt fails.
+
+    Some scanners/exporters write PDFs with a broken or missing xref/trailer
+    (pdfminer then raises e.g. "No /Root object! - Is this really a PDF?")
+    that Adobe/Chrome silently repair on open. pikepdf wraps qpdf, which can
+    rebuild the xref table and recover the same file those viewers show.
+    """
+    try:
+        return pdfplumber.open(pdf_path)
+    except Exception as original_error:
+        try:
+            fd, repaired_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            with pikepdf.open(pdf_path) as pdf:
+                pdf.save(repaired_path)
+            return pdfplumber.open(repaired_path)
+        except Exception:
+            raise original_error
+
+
 def parse_pdf(pdf_path):
-    """Returns (meta_dict, list_of_clocking_record_dicts)."""
+    """Returns (meta_dict, list_of_clocking_record_dicts).
+
+    Raises ValueError if no clocking records are found. The column x-positions
+    and HH:MM[:SS] row format this relies on (see module docstring) were
+    tuned against one report template - other exports may lay out columns or
+    format times differently. Rather than guess, the error includes a preview
+    of what was actually extracted, so a real mismatch can be diagnosed from
+    the error message alone instead of needing the source PDF.
+    """
     records = []
     current_date = None
+    any_words = False
+    sample_lines = []
 
-    with pdfplumber.open(pdf_path) as pdf:
+    with _open_pdf(pdf_path) as pdf:
         meta = parse_metadata(pdf.pages[0].extract_text())
 
         for page in pdf.pages:
             words = page.extract_words()
+            if words:
+                any_words = True
 
             # Group words into visual lines by their y-position ("top").
             lines = {}
@@ -222,6 +259,9 @@ def parse_pdf(pdf_path):
                 if not line_str.strip():
                     continue
 
+                if len(sample_lines) < 4:
+                    sample_lines.append(line_str[:120])
+
                 in_words = [w for w in ws if w["x0"] < IN_OUT_SPLIT_X]
                 out_words = [w for w in ws if w["x0"] >= IN_OUT_SPLIT_X]
 
@@ -239,6 +279,24 @@ def parse_pdf(pdf_path):
                     records.append({"Date": line_date, "Direction": "IN", **rec})
                 for rec in chunk_into_fields(out_texts):
                     records.append({"Date": line_date, "Direction": "OUT", **rec})
+
+    if not records:
+        if not any_words:
+            raise ValueError(
+                "No clocking records found - the PDF has no extractable text "
+                "(likely a scanned image rather than a generated report)."
+            )
+        if not sample_lines:
+            raise ValueError(
+                "No clocking records found - every line matched a known header/"
+                "boilerplate pattern, so the report may be empty for this date range."
+            )
+        preview = "  |  ".join(sample_lines)
+        raise ValueError(
+            "No clocking records found - none of the report's lines matched the "
+            "expected 'HH:MM[:SS] From To Point Type' row format (see module "
+            f"docstring for the column layout this parser expects). Lines seen: {preview}"
+        )
 
     return meta, records
 
@@ -570,67 +628,54 @@ def write_timesheet_sheet(
             for c in range(1, len(headers) + 1):
                 ws.cell(row=r, column=c).fill = FLAG_FILL
 
-    # Computed here in Python rather than written as Excel formulas (e.g.
-    # "=SUM(...)") - some viewers show formulas as blank until the workbook
-    # is recalculated, so writing the actual value guarantees it's visible
-    # immediately regardless of viewer/calculation settings.
-    def sum_timedeltas(values):
-        # pandas stores this column as timedelta64[ns], so missing entries
-        # are NaT rather than None - and bool(NaT) is True, so a plain
-        # `if v` truthiness check lets NaT through and poisons the sum
-        # (any arithmetic with NaT produces NaT). pd.notna() is required.
-        present = [v for v in values if pd.notna(v)]
-        if not present:
-            return None  # whole column is blank - show blank, not "0:00"
-        total = timedelta()
-        for v in present:
-            total += v
-        return total
-
-    totals = {
-        6: sum_timedeltas(timesheet_df["Hrs of work"]),
-        7: sum_timedeltas(timesheet_df["Planned"]),
-        8: sum_timedeltas(timesheet_df["O/T Minutes"]),
-        9: sum_timedeltas(timesheet_df["S/T Minutes"]),
-    }
-
+    # Written as live Excel formulas (not Python-computed values) so that
+    # editing any daily row - e.g. correcting a mis-parsed "Hrs of work" -
+    # recalculates the TOTAL row and the summary box below it automatically.
+    # build_workbook() sets calcPr/fullCalcOnLoad so the results are also
+    # correct the moment the workbook is opened, not just after an edit.
     total_row = first_data_row + len(timesheet_df)
+    last_data_row = total_row - 1
     ws.cell(row=total_row, column=5, value="TOTAL").font = Font(name="Arial", size=10, bold=True)
     ws.cell(row=total_row, column=5).alignment = Alignment(horizontal="right")
-    for col, total_val in totals.items():
-        cell = ws.cell(row=total_row, column=col, value=total_val)
+    total_formulas = {
+        6: f"=SUM(F{first_data_row}:F{last_data_row})",
+        7: f"=SUM(G{first_data_row}:G{last_data_row})",
+        8: f"=SUM(H{first_data_row}:H{last_data_row})",
+        9: f"=SUM(I{first_data_row}:I{last_data_row})",
+    }
+    for col, formula in total_formulas.items():
+        cell = ws.cell(row=total_row, column=col, value=formula)
         cell.font = Font(name="Arial", size=10, bold=True)
         cell.number_format = "[h]:mm"
         cell.alignment = Alignment(horizontal="center")
     for c in range(1, len(headers) + 1):
         ws.cell(row=total_row, column=c).border = BORDER
 
-    planned_total, actual_total = totals[7], totals[6]
-    # Overtime = sum of the daily O/T + S/T Minutes columns, not Actual -
-    # Planned - a net figure would let an under-worked day cancel out
-    # overtime earned on another day, which isn't how overtime pay works.
-    overtime_total = sum_timedeltas((totals[8], totals[9]))
+    planned_cell, actual_cell = f"G{total_row}", f"F{total_row}"
+    ot_cell, st_cell = f"H{total_row}", f"I{total_row}"
 
     box_row = total_row + 3
     ws.cell(row=box_row, column=6, value="Planned Hours").font = LABEL_FONT
-    ws.cell(row=box_row, column=7, value=planned_total).number_format = "[h]:mm"
+    ws.cell(row=box_row, column=7, value=f"={planned_cell}").number_format = "[h]:mm"
     ws.cell(row=box_row + 1, column=6, value="Actual Hours").font = LABEL_FONT
-    ws.cell(row=box_row + 1, column=7, value=actual_total).number_format = "[h]:mm"
+    ws.cell(row=box_row + 1, column=7, value=f"={actual_cell}").number_format = "[h]:mm"
     ws.cell(row=box_row + 2, column=6, value="Overtime Hours").font = LABEL_FONT
-    overtime_hours = overtime_total.total_seconds() / 3600 if overtime_total is not None else None
-    ws.cell(row=box_row + 2, column=7, value=overtime_hours).number_format = "0.00 \"h\""
+    # O/T Minutes and S/T Minutes cells hold Excel durations (a fraction of a
+    # day) - Overtime = sum of the daily O/T + S/T columns, not Actual -
+    # Planned (a net figure would let an under-worked day cancel out
+    # overtime earned on another day, which isn't how overtime pay works),
+    # multiplied by 24 to turn the day-fraction into a decimal hour count.
+    ws.cell(row=box_row + 2, column=7, value=f"=({ot_cell}+{st_cell})*24").number_format = (
+        '0.00 "h"'
+    )
 
     # Paid overtime hours - O/T and S/T are worked at different rates, so
     # they're weighted separately rather than multiplying the flat total.
-    ot_hours = totals[8].total_seconds() / 3600 if totals[8] is not None else 0.0
-    st_hours = totals[9].total_seconds() / 3600 if totals[9] is not None else 0.0
-    paid_overtime_hours = (
-        ot_hours * OT_RATE + st_hours * ST_RATE
-        if totals[8] is not None or totals[9] is not None
-        else None
-    )
     ws.cell(row=box_row + 3, column=6, value="Overtime Pay (hours)").font = LABEL_FONT
-    ws.cell(row=box_row + 3, column=7, value=paid_overtime_hours).number_format = "0.00 \"h\""
+    ws.cell(
+        row=box_row + 3, column=7,
+        value=f"=({ot_cell}*24*{OT_RATE})+({st_cell}*24*{ST_RATE})",
+    ).number_format = '0.00 "h"'
 
     if rotating:
         schedule_note = (
@@ -676,6 +721,10 @@ def build_workbook(
     write_timesheet_sheet(
         wb, meta, timesheet_df, work_days=work_days, hours_per_day=hours_per_day, rotating=rotating
     )
+    # The totals/summary box are formulas (see write_timesheet_sheet) so they
+    # stay correct after an edit; this flags the workbook to fully recompute
+    # them on open too, since openpyxl writes formulas with no cached result.
+    wb.calculation.fullCalcOnLoad = True
     wb.save(out_path)
 
 
@@ -693,8 +742,6 @@ def process_one(
     schedule (see build_timesheet) - default Mon-Fri, 8h/day, not rotating."""
     log(f"Parsing {pdf_path} ...")
     meta, records = parse_pdf(str(pdf_path))
-    if not records:
-        raise ValueError("No clocking records found - check the PDF layout / column x-positions.")
 
     df = build_dataframe(records)
     full_daily = build_daily_summary(df, meta["Date From"], meta["Date To"])

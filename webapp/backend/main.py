@@ -87,10 +87,6 @@ async def parse_pdf(
 
     try:
         meta, records = parser.parse_pdf(str(in_path))
-        if not records:
-            raise ValueError(
-                "No clocking records found - check the PDF layout / column x-positions."
-            )
 
         df = parser.build_dataframe(records)
         full_daily = parser.build_daily_summary(df, meta["Date From"], meta["Date To"])
