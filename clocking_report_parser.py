@@ -70,8 +70,10 @@ import os
 import re
 import sys
 import tempfile
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pandas as pd
 import pdfplumber
@@ -631,23 +633,44 @@ def write_timesheet_sheet(
     # Written as live Excel formulas (not Python-computed values) so that
     # editing any daily row - e.g. correcting a mis-parsed "Hrs of work" -
     # recalculates the TOTAL row and the summary box below it automatically.
-    # build_workbook() sets calcPr/fullCalcOnLoad so the results are also
-    # correct the moment the workbook is opened, not just after an edit.
+    # build_workbook() also patches in a cached result for each formula (see
+    # _write_cached_formula_values) so they're correct on first open too,
+    # not just after an edit - openpyxl has no calc engine, so a formula
+    # with no cached value shows blank/0 until Excel recalculates it, which
+    # it defers while the file is still in Protected View.
+    def sum_timedeltas(values):
+        # pandas stores this column as timedelta64[ns], so missing entries
+        # are NaT rather than None - and bool(NaT) is True, so a plain
+        # `if v` truthiness check lets NaT through and poisons the sum
+        # (any arithmetic with NaT produces NaT). pd.notna() is required.
+        total = timedelta()
+        for v in values:
+            if pd.notna(v):
+                total += v
+        return total
+
+    hrs_total = sum_timedeltas(timesheet_df["Hrs of work"])
+    planned_total = sum_timedeltas(timesheet_df["Planned"])
+    ot_total = sum_timedeltas(timesheet_df["O/T Minutes"])
+    st_total = sum_timedeltas(timesheet_df["S/T Minutes"])
+
     total_row = first_data_row + len(timesheet_df)
     last_data_row = total_row - 1
     ws.cell(row=total_row, column=5, value="TOTAL").font = Font(name="Arial", size=10, bold=True)
     ws.cell(row=total_row, column=5).alignment = Alignment(horizontal="right")
     total_formulas = {
-        6: f"=SUM(F{first_data_row}:F{last_data_row})",
-        7: f"=SUM(G{first_data_row}:G{last_data_row})",
-        8: f"=SUM(H{first_data_row}:H{last_data_row})",
-        9: f"=SUM(I{first_data_row}:I{last_data_row})",
+        6: (f"SUM(F{first_data_row}:F{last_data_row})", hrs_total),
+        7: (f"SUM(G{first_data_row}:G{last_data_row})", planned_total),
+        8: (f"SUM(H{first_data_row}:H{last_data_row})", ot_total),
+        9: (f"SUM(I{first_data_row}:I{last_data_row})", st_total),
     }
-    for col, formula in total_formulas.items():
-        cell = ws.cell(row=total_row, column=col, value=formula)
+    cached_values = {}
+    for col, (formula, cached_total) in total_formulas.items():
+        cell = ws.cell(row=total_row, column=col, value=f"={formula}")
         cell.font = Font(name="Arial", size=10, bold=True)
         cell.number_format = "[h]:mm"
         cell.alignment = Alignment(horizontal="center")
+        cached_values[cell.coordinate] = cached_total.total_seconds() / 86400
     for c in range(1, len(headers) + 1):
         ws.cell(row=total_row, column=c).border = BORDER
 
@@ -656,26 +679,37 @@ def write_timesheet_sheet(
 
     box_row = total_row + 3
     ws.cell(row=box_row, column=6, value="Planned Hours").font = LABEL_FONT
-    ws.cell(row=box_row, column=7, value=f"={planned_cell}").number_format = "[h]:mm"
+    c = ws.cell(row=box_row, column=7, value=f"={planned_cell}")
+    c.number_format = "[h]:mm"
+    cached_values[c.coordinate] = planned_total.total_seconds() / 86400
+
     ws.cell(row=box_row + 1, column=6, value="Actual Hours").font = LABEL_FONT
-    ws.cell(row=box_row + 1, column=7, value=f"={actual_cell}").number_format = "[h]:mm"
+    c = ws.cell(row=box_row + 1, column=7, value=f"={actual_cell}")
+    c.number_format = "[h]:mm"
+    cached_values[c.coordinate] = hrs_total.total_seconds() / 86400
+
     ws.cell(row=box_row + 2, column=6, value="Overtime Hours").font = LABEL_FONT
     # O/T Minutes and S/T Minutes cells hold Excel durations (a fraction of a
     # day) - Overtime = sum of the daily O/T + S/T columns, not Actual -
     # Planned (a net figure would let an under-worked day cancel out
     # overtime earned on another day, which isn't how overtime pay works),
     # multiplied by 24 to turn the day-fraction into a decimal hour count.
-    ws.cell(row=box_row + 2, column=7, value=f"=({ot_cell}+{st_cell})*24").number_format = (
-        '0.00 "h"'
-    )
+    c = ws.cell(row=box_row + 2, column=7, value=f"=({ot_cell}+{st_cell})*24")
+    c.number_format = '0.00 "h"'
+    overtime_hours = (ot_total + st_total).total_seconds() / 3600
+    cached_values[c.coordinate] = overtime_hours
 
     # Paid overtime hours - O/T and S/T are worked at different rates, so
     # they're weighted separately rather than multiplying the flat total.
     ws.cell(row=box_row + 3, column=6, value="Overtime Pay (hours)").font = LABEL_FONT
-    ws.cell(
+    c = ws.cell(
         row=box_row + 3, column=7,
         value=f"=({ot_cell}*24*{OT_RATE})+({st_cell}*24*{ST_RATE})",
-    ).number_format = '0.00 "h"'
+    )
+    c.number_format = '0.00 "h"'
+    ot_hours = ot_total.total_seconds() / 3600
+    st_hours = st_total.total_seconds() / 3600
+    cached_values[c.coordinate] = ot_hours * OT_RATE + st_hours * ST_RATE
 
     if rotating:
         schedule_note = (
@@ -713,19 +747,63 @@ def write_timesheet_sheet(
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.auto_filter.ref = f"A{header_row}:J{total_row - 1}"
 
+    return cached_values
+
+
+_XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+def _write_cached_formula_values(xlsx_path, cached_values):
+    """Patch a cached <v> result into formula cells after wb.save().
+
+    openpyxl has no calculation engine, so it saves a formula cell as
+    <c r="F96"><f>SUM(...)</f><v></v></c> - an empty cached result. Excel
+    treats that as needing recalculation before it can display anything,
+    which it defers while the file is still in Protected View (the default
+    state for anything downloaded via a browser), so the totals/summary box
+    show blank until the user clicks "Enable Editing". A genuine
+    Excel-authored file always carries a cached result alongside the
+    formula; this fills that in with the same number the formula itself
+    computes, so it's correct on first open. The formula string is left
+    untouched, so it still recalculates normally the moment a dependent
+    cell is edited.
+
+    `cached_values` is {cell_ref: number}, e.g. {"F96": 0.40277...}.
+    """
+    ET.register_namespace("", _XLSX_MAIN_NS)
+    with zipfile.ZipFile(xlsx_path, "r") as zin:
+        contents = {name: zin.read(name) for name in zin.namelist()}
+
+    sheet_name = next(n for n in contents if n.startswith("xl/worksheets/sheet"))
+    root = ET.fromstring(contents[sheet_name])
+    for c in root.iter(f"{{{_XLSX_MAIN_NS}}}c"):
+        ref = c.get("r")
+        if ref not in cached_values:
+            continue
+        v = c.find(f"{{{_XLSX_MAIN_NS}}}v")
+        if v is None:
+            v = ET.SubElement(c, f"{{{_XLSX_MAIN_NS}}}v")
+        v.text = repr(float(cached_values[ref]))
+    contents[sheet_name] = ET.tostring(root, encoding="UTF-8", xml_declaration=True)
+
+    with zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in contents.items():
+            zout.writestr(name, data)
+
 
 def build_workbook(
     meta, timesheet_df, out_path, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DAY, rotating=False
 ):
     wb = Workbook()
-    write_timesheet_sheet(
+    cached_values = write_timesheet_sheet(
         wb, meta, timesheet_df, work_days=work_days, hours_per_day=hours_per_day, rotating=rotating
     )
-    # The totals/summary box are formulas (see write_timesheet_sheet) so they
-    # stay correct after an edit; this flags the workbook to fully recompute
-    # them on open too, since openpyxl writes formulas with no cached result.
+    # Formulas still recalculate normally on edit (see write_timesheet_sheet
+    # / _write_cached_formula_values) - fullCalcOnLoad is a best-effort
+    # extra nudge for viewers that do run a full recalc on open.
     wb.calculation.fullCalcOnLoad = True
     wb.save(out_path)
+    _write_cached_formula_values(out_path, cached_values)
 
 
 # ----------------------------------------------------------------------------
