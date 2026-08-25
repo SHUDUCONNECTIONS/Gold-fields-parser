@@ -358,8 +358,10 @@ def build_hours_worked(df, work_point=WORK_POINT):
                 {
                     "Shift Date": a["Date"],
                     "Clock In": a["Time"],
+                    "Clock In Datetime": a["Datetime"],
                     "Clock Out Date": b["Date"],
                     "Clock Out": b["Time"],
+                    "Clock Out Datetime": b["Datetime"],
                     "Hours Worked": round(dur_h, 2),
                     "Note": "Short / possible anomaly" if dur_h < 1 else "",
                 }
@@ -370,8 +372,10 @@ def build_hours_worked(df, work_point=WORK_POINT):
                 {
                     "Shift Date": a["Date"],
                     "Clock In": a["Time"] if a["Direction"] == "IN" else "",
+                    "Clock In Datetime": a["Datetime"] if a["Direction"] == "IN" else pd.NaT,
                     "Clock Out Date": a["Date"] if a["Direction"] == "OUT" else "",
                     "Clock Out": a["Time"] if a["Direction"] == "OUT" else "",
+                    "Clock Out Datetime": a["Datetime"] if a["Direction"] == "OUT" else pd.NaT,
                     "Hours Worked": 0,
                     "Note": "Unmatched clocking - could not pair",
                 }
@@ -401,8 +405,10 @@ def build_hours_worked_fallback(df, gap_hours=FALLBACK_SESSION_GAP_HOURS):
         {
             "Shift Date": sessions["Start"].dt.strftime("%Y-%m-%d"),
             "Clock In": sessions["Start"].dt.strftime("%H:%M:%S"),
+            "Clock In Datetime": sessions["Start"],
             "Clock Out Date": sessions["End"].dt.strftime("%Y-%m-%d"),
             "Clock Out": sessions["End"].dt.strftime("%H:%M:%S"),
+            "Clock Out Datetime": sessions["End"],
             "Hours Worked": sessions["Hours Worked"],
             "Note": "Fallback: clustered by gap > "
             f"{gap_hours}h (no Work/{WORK_POINT} events found)",
@@ -457,19 +463,37 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     the source PDF either way:
 
     - `rotating=False` (default): by day-of-week. `work_days` (a set of
-      weekday() indices, Monday=0..Sunday=6; default Mon-Fri) get "D/S" with
-      `hours_per_day` planned hours, every other day gets "OFF" with no
-      planned hours. Configure `work_days`/`hours_per_day` to match the
-      company's normal schedule if it isn't a plain Mon-Fri week.
+      weekday() indices, Monday=0..Sunday=6; default Mon-Fri) get a planned
+      shift with `hours_per_day` planned hours, every other day gets "OFF"
+      with no planned hours. Configure `work_days`/`hours_per_day` to match
+      the company's normal schedule if it isn't a plain Mon-Fri week.
     - `rotating=True`: for shifts that don't follow a fixed weekly pattern
-      (e.g. 4-on/4-off) - `work_days` is ignored, and instead every day with
-      at least one clocking is treated as a scheduled `hours_per_day` day
-      (every day with no clocking is OFF). This can't tell a genuine rest
-      day from a missed clocking, but a day-of-week guess would be no more
-      accurate for a rotation that isn't tied to the calendar week.
+      (e.g. 4-on/4-off) - `work_days` is ignored, and instead every day a
+      shift is attributed to (see below) is treated as a scheduled
+      `hours_per_day` day (every other day is OFF). This can't tell a
+      genuine rest day from a missed clocking, but a day-of-week guess would
+      be no more accurate for a rotation that isn't tied to the calendar
+      week.
 
-    1st/2nd are the first and last clocking of the day (any type), and
-    Hrs of work is simply their difference, matching the reference layout.
+    A scheduled day's "Shift" is "N/S" (night shift) if its clocking pair
+    crosses midnight - i.e. clock-out falls on the following calendar day -
+    and "D/S" (day shift) otherwise.
+
+    Each row's hours come from `build_hours_worked()`'s IN/OUT shift pairing
+    (see its docstring). A shift is attributed to the calendar day it
+    *started* on - e.g. a Tuesday-night shift ending Wednesday morning is
+    still "Tuesday's" shift - with one exception: a shift that starts on a
+    Sunday night counts entirely toward the Monday it ends on instead (both
+    "N/S" and the full hours worked land on Monday's row, not Sunday's), so
+    it isn't taxed as Sunday time (see S/T Minutes below) when most of its
+    hours were actually worked on Monday. (An unmatched clock-in with no
+    paired clock-out yet falls back to its own day, since no end date is
+    known.) This attribution is what lets an overnight shift show up as one
+    correctly-sized row instead of being split into two mostly-empty ones.
+    1st/2nd are that day's earliest and latest clocking (clock-in or
+    clock-out) across all its shifts, and Hrs of work is the sum of those
+    shifts' paired durations (not simply 2nd - 1st, which would overcount if
+    a day has more than one shift).
 
     O/T Minutes (1.5x) is any time worked beyond `hours_per_day` on a
     non-Sunday - e.g. staying past a planned 8h shift. S/T Minutes (2.0x,
@@ -483,20 +507,44 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     start = datetime.strptime(meta["Date From"], "%Y-%m-%d")
     end = datetime.strptime(meta["Date To"], "%Y-%m-%d")
 
-    span = df.groupby("Date")["Datetime"].agg(First="min", Last="max")
+    shifts = build_hours_worked(df)
+    by_day = {}
+    for _, s in shifts.iterrows():
+        start_day = s["Shift Date"]
+        end_day = s["Clock Out Date"] or start_day
+        crosses_midnight = end_day != start_day
+        # A shift is attributed to the day it started on - e.g. a Tuesday
+        # night shift ending Wednesday morning is still "Tuesday's" shift -
+        # except a Sunday-night shift, which counts entirely toward the
+        # Monday it ends on instead (so it isn't taxed as Sunday time when
+        # most of its hours were actually worked on Monday).
+        starts_sunday = datetime.strptime(start_day, "%Y-%m-%d").weekday() == WEEKDAY_ABBR["sun"]
+        attribution_day = end_day if (crosses_midnight and starts_sunday) else start_day
+        by_day.setdefault(attribution_day, []).append(s)
 
     rows = []
     cur = start
     while cur <= end:
         date_str = cur.strftime("%Y-%m-%d")
-        is_scheduled = date_str in span.index if rotating else cur.weekday() in work_days
+        day_shifts = by_day.get(date_str, [])
+        is_scheduled = bool(day_shifts) if rotating else cur.weekday() in work_days
 
-        if date_str in span.index:
-            first_dt = span.loc[date_str, "First"]
-            last_dt = span.loc[date_str, "Last"]
-            hrs_of_work = last_dt - first_dt
+        if day_shifts:
+            times = [
+                t
+                for s in day_shifts
+                for t in (s["Clock In Datetime"], s["Clock Out Datetime"])
+                if pd.notna(t)
+            ]
+            first_dt = min(times) if times else None
+            last_dt = max(times) if times else None
+            hrs_of_work = timedelta(hours=sum(s["Hours Worked"] for s in day_shifts))
+            is_night = any(
+                s["Clock Out Date"] not in ("", s["Shift Date"]) for s in day_shifts
+            )
         else:
             first_dt = last_dt = hrs_of_work = None
+            is_night = False
 
         comment = ""
         if is_scheduled and first_dt is None:
@@ -516,11 +564,18 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
             ot_minutes = excess if excess > timedelta() else None
             st_minutes = None
 
+        if not is_scheduled:
+            shift_label = "OFF"
+        elif is_night:
+            shift_label = "N/S"
+        else:
+            shift_label = "D/S"
+
         rows.append(
             {
                 "Day": cur.strftime("%A"),
                 "Date": cur,
-                "Shift": "D/S" if is_scheduled else "OFF",
+                "Shift": shift_label,
                 "1st": first_dt.time() if first_dt is not None else None,
                 "2nd": last_dt.time() if last_dt is not None else None,
                 "Hrs of work": hrs_of_work,
