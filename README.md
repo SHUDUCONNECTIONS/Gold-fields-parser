@@ -119,18 +119,8 @@ table with totals and a Planned/Actual/Overtime summary box.
 
 - **Day** is derived from **Date** (`Date.strftime("%A")`) — every calendar
   day in the report's date range gets a row, not just days with clockings.
-- **1st / 2nd** are that day's earliest and latest clock-in/clock-out, and
-  **Hrs of work** is the sum of its paired shift(s)' durations (see "Notes on
-  Hours Worked" below) — both are attributed to the day a shift *started* on
-  (e.g. a Tuesday-night shift ending Wednesday morning is still Tuesday's),
-  except a **Sunday**-night shift, which counts entirely toward the Monday
-  it ends on instead, so it isn't taxed as Sunday time when most of its
-  hours were actually worked on Monday. This attribution is what lets an
-  overnight shift show up as one correctly-sized row instead of being split
-  across two mostly-empty ones.
-- On a scheduled day, **Shift** is `N/S` (night shift) if the shift crosses
-  midnight — clock-out falls on the next calendar day — and `D/S` (day shift)
-  otherwise; unscheduled days are `OFF` either way.
+- **1st / 2nd** are that day's first and last clocking; **Hrs of work** is
+  simply their difference.
 - **Shift and Planned hours are guessed**, since there's no roster in the
   source PDF, one of two ways:
   - **By day-of-week** (`--work-days`) — every day in the list gets
