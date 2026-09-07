@@ -71,7 +71,7 @@ import re
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -93,6 +93,11 @@ WORK_POINT = "U01"
 # Gap threshold (hours) used only as a sanity fallback if no Work/U01 pairs
 # are found in the report (see build_hours_worked_fallback()).
 FALLBACK_SESSION_GAP_HOURS = 14
+
+# A shift is a "night shift" if its clock-in time is at/after this time.
+# Night shift hours are attributed to the day the shift ends on (the day
+# worked *into*), not the day clocked in on - see build_hours_worked().
+NIGHT_SHIFT_START = time(18, 30)
 
 # x-coordinate boundaries used to classify each word into IN vs OUT columns,
 # and then into a specific field within that side. Adjust these if your PDF's
@@ -341,7 +346,11 @@ def build_daily_summary(df, date_from, date_to):
 
 
 def build_hours_worked(df, work_point=WORK_POINT):
-    """Pair IN/OUT clockings of Type == 'Work' at `work_point` into shifts."""
+    """Pair IN/OUT clockings of Type == 'Work' at `work_point` into shifts.
+
+    A shift whose clock-in time is at/after NIGHT_SHIFT_START (18:30) is a
+    night shift, and its hours are attributed to the day it ends on (the day
+    worked *into*) rather than the day clocked in on."""
     work = df[(df["Type"] == "Work") & (df["Point"] == work_point)].reset_index(drop=True)
 
     if work.empty:
@@ -354,20 +363,23 @@ def build_hours_worked(df, work_point=WORK_POINT):
         if a["Direction"] == "IN" and i + 1 < len(work) and work.iloc[i + 1]["Direction"] == "OUT":
             b = work.iloc[i + 1]
             dur_h = (b["Datetime"] - a["Datetime"]).total_seconds() / 3600
+            is_night = a["Datetime"].time() >= NIGHT_SHIFT_START
             shifts.append(
                 {
-                    "Shift Date": a["Date"],
+                    "Shift Date": b["Date"] if is_night else a["Date"],
                     "Clock In": a["Time"],
                     "Clock In Datetime": a["Datetime"],
                     "Clock Out Date": b["Date"],
                     "Clock Out": b["Time"],
                     "Clock Out Datetime": b["Datetime"],
                     "Hours Worked": round(dur_h, 2),
+                    "Is Night": is_night,
                     "Note": "Short / possible anomaly" if dur_h < 1 else "",
                 }
             )
             i += 2
         else:
+            is_night = a["Direction"] == "IN" and a["Datetime"].time() >= NIGHT_SHIFT_START
             shifts.append(
                 {
                     "Shift Date": a["Date"],
@@ -377,6 +389,7 @@ def build_hours_worked(df, work_point=WORK_POINT):
                     "Clock Out": a["Time"] if a["Direction"] == "OUT" else "",
                     "Clock Out Datetime": a["Datetime"] if a["Direction"] == "OUT" else pd.NaT,
                     "Hours Worked": 0,
+                    "Is Night": is_night,
                     "Note": "Unmatched clocking - could not pair",
                 }
             )
@@ -400,16 +413,19 @@ def build_hours_worked_fallback(df, gap_hours=FALLBACK_SESSION_GAP_HOURS):
         (sessions["End"] - sessions["Start"]).dt.total_seconds() / 3600
     ).round(2)
     sessions = sessions.reset_index()
+    is_night = sessions["Start"].dt.time >= NIGHT_SHIFT_START
+    shift_date = sessions["End"].where(is_night, sessions["Start"])
 
     return pd.DataFrame(
         {
-            "Shift Date": sessions["Start"].dt.strftime("%Y-%m-%d"),
+            "Shift Date": shift_date.dt.strftime("%Y-%m-%d"),
             "Clock In": sessions["Start"].dt.strftime("%H:%M:%S"),
             "Clock In Datetime": sessions["Start"],
             "Clock Out Date": sessions["End"].dt.strftime("%Y-%m-%d"),
             "Clock Out": sessions["End"].dt.strftime("%H:%M:%S"),
             "Clock Out Datetime": sessions["End"],
             "Hours Worked": sessions["Hours Worked"],
+            "Is Night": is_night,
             "Note": "Fallback: clustered by gap > "
             f"{gap_hours}h (no Work/{WORK_POINT} events found)",
         }
@@ -475,36 +491,31 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
       be no more accurate for a rotation that isn't tied to the calendar
       week.
 
-    A scheduled day's "Shift" is "N/S" (night shift) if its clocking pair
-    crosses midnight - i.e. clock-out falls on the following calendar day -
-    and "D/S" (day shift) otherwise.
+    A scheduled day's "Shift" is "N/S" (night shift) if its clock-in time is
+    at/after NIGHT_SHIFT_START (18:30) and "D/S" (day shift) otherwise.
 
     Each row's hours come from `build_hours_worked()`'s IN/OUT shift pairing
-    (see its docstring), always attributed to the calendar day the shift
-    *started* on - e.g. a Tuesday-night shift ending Wednesday morning is
-    "Tuesday's" shift, including a Sunday-night shift, which stays on
-    Sunday's row rather than being moved to Monday. (An unmatched clock-in
-    with no paired clock-out yet falls back to its own day, since no end
-    date is known.) This attribution is what lets an overnight shift show up
-    as one correctly-sized row instead of being split into two mostly-empty
-    ones. 1st/2nd are that day's earliest and latest clocking (clock-in or
+    (see its docstring). A day-shift's hours are attributed to the calendar
+    day it *started* on. A night-shift's hours are attributed to the day it
+    is worked *into* - i.e. the calendar day it clocks out on - e.g. a shift
+    clocking in Tuesday at 22:00 and out Wednesday at 06:00 is "Wednesday's"
+    shift, including a Sunday-night shift, which moves onto Monday's row
+    rather than staying on Sunday's. (An unmatched clock-in with no paired
+    clock-out yet falls back to its own day, since no end date is known.)
+    1st/2nd are that day's earliest and latest clocking (clock-in or
     clock-out) across all its shifts, and Hrs of work is the sum of those
     shifts' paired durations (not simply 2nd - 1st, which would overcount if
     a day has more than one shift).
 
     O/T Minutes (1.5x) is any time worked beyond `hours_per_day` on a
     non-Sunday - e.g. staying past a planned 8h shift. S/T Minutes (2.0x,
-    "Sunday Time") covers time actually worked on a Sunday: for an ordinary
-    Sunday shift that doesn't cross midnight, that's the whole shift, same
-    as O/T Minutes would ordinarily be earned - Sunday work never counts
-    toward O/T Minutes there. A Sunday-*night* shift that crosses into
-    Monday splits at midnight instead: only the pre-midnight hours count as
-    S/T Minutes, while the post-midnight hours are ordinary Monday time,
-    eligible for O/T Minutes like any other shift's overrun - so a 22:00
-    Sunday to 06:00 Monday shift earns S/T for the 2 hours before midnight
-    and treats the other 6 as a normal (still Sunday-dated) shift for O/T
-    purposes, rather than taxing the whole shift as Sunday time or none of
-    it.
+    "Sunday Time") covers time worked on a Sunday: the full "Hrs of work"
+    attributed to that Sunday's row, with no O/T earned there. A Sunday
+    *night* shift (clock-in >= 18:30) is entirely attributed to Monday's row
+    (per the night-shift rule above), so it earns no S/T at all - it's
+    ordinary Monday time, eligible for O/T like any other shift's overrun.
+    Only a Sunday day-shift that happens to run past midnight (started
+    before 18:30) stays on Sunday's row and is taxed as full Sunday S/T time.
     """
     if not rotating and work_days is None:
         work_days = DEFAULT_WORK_DAYS
@@ -534,9 +545,7 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
             first_dt = min(times) if times else None
             last_dt = max(times) if times else None
             hrs_of_work = timedelta(hours=sum(s["Hours Worked"] for s in day_shifts))
-            is_night = any(
-                s["Clock Out Date"] not in ("", s["Shift Date"]) for s in day_shifts
-            )
+            is_night = any(s["Is Night"] for s in day_shifts)
         else:
             first_dt = last_dt = hrs_of_work = None
             is_night = False
@@ -553,28 +562,13 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
         if hrs_of_work is None:
             ot_minutes = st_minutes = None
         elif is_sunday:
-            # Split each shift's hours at midnight: time that literally falls
-            # on the Sunday earns S/T; time that spills into Monday is
-            # ordinary shift time, eligible for O/T like any other overrun
-            # (unlike the pre-midnight portion, which never earns O/T).
-            sunday_hours = timedelta()
-            spills_into_monday = False
-            for s in day_shifts:
-                in_dt, out_dt = s["Clock In Datetime"], s["Clock Out Datetime"]
-                if pd.isna(in_dt) or pd.isna(out_dt):
-                    continue
-                midnight = datetime.combine(in_dt.date() + timedelta(days=1), datetime.min.time())
-                if out_dt > midnight:
-                    sunday_hours += midnight - in_dt
-                    spills_into_monday = True
-                else:
-                    sunday_hours += out_dt - in_dt
-            st_minutes = sunday_hours if sunday_hours > timedelta() else None
-            if spills_into_monday:
-                excess = hrs_of_work - (planned or timedelta())
-                ot_minutes = excess if excess > timedelta() else None
-            else:
-                ot_minutes = None
+            # A night shift (clock-in >= 18:30) is never attributed to a
+            # Sunday row - it belongs to Monday (see build_hours_worked). So
+            # anything left on a Sunday row is either an ordinary Sunday
+            # shift or a day-shift that happens to run past midnight; either
+            # way it's taxed as full Sunday S/T time, with no O/T.
+            st_minutes = hrs_of_work if hrs_of_work > timedelta() else None
+            ot_minutes = None
         else:
             excess = hrs_of_work - (planned or timedelta())
             ot_minutes = excess if excess > timedelta() else None

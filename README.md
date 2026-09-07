@@ -121,14 +121,15 @@ table with totals and a Planned/Actual/Overtime summary box.
   day in the report's date range gets a row, not just days with clockings.
 - **1st / 2nd** are that day's earliest and latest clock-in/clock-out, and
   **Hrs of work** is the sum of its paired shift(s)' durations (see "Notes on
-  Hours Worked" below) — both are attributed to the day a shift *started* on
-  (e.g. a Tuesday-night shift ending Wednesday morning is still Tuesday's,
-  and a Sunday-night shift ending Monday morning is still Sunday's). This
-  attribution is what lets an overnight shift show up as one correctly-sized
-  row instead of being split across two mostly-empty ones.
-- On a scheduled day, **Shift** is `N/S` (night shift) if the shift crosses
-  midnight — clock-out falls on the next calendar day — and `D/S` (day shift)
-  otherwise; unscheduled days are `OFF` either way.
+  Hours Worked" below). A **day shift** (clock-in before 18:30) is attributed
+  to the day it *started* on. A **night shift** (clock-in at/after 18:30) is
+  attributed to the day it's worked *into* — the day it clocks out on — e.g.
+  a shift clocking in Tuesday at 22:00 and out Wednesday at 06:00 is
+  Wednesday's, including a Sunday-night shift, which moves onto Monday's row
+  rather than staying on Sunday's.
+- On a scheduled day, **Shift** is `N/S` (night shift) if the clock-in time
+  is at/after 18:30, and `D/S` (day shift) otherwise; unscheduled days are
+  `OFF` either way.
 - **Shift and Planned hours are guessed**, since there's no roster in the
   source PDF, one of two ways:
   - **By day-of-week** (`--work-days`) — every day in the list gets
@@ -147,16 +148,13 @@ table with totals and a Planned/Actual/Overtime summary box.
     scheduled to work Saturdays). Sunday work always counts as overtime
     either way
 - **O/T Minutes** is any time worked beyond the planned daily hours on a
-  non-Sunday, paid at **1.5x**. **S/T Minutes** ("Sunday Time") is time
-  worked on a Sunday, paid at **2.0x**. For an ordinary Sunday shift that
-  doesn't cross midnight, that's the whole shift, and it never counts toward
-  O/T Minutes. A **Sunday-night** shift that crosses into Monday splits at
-  midnight instead: only the pre-midnight hours earn S/T Minutes, while the
-  post-midnight hours are ordinary (still Sunday-dated) shift time, eligible
-  for O/T Minutes like any other overrun — so a 22:00 Sunday to 06:00 Monday
-  shift earns S/T for 2 hours and treats the other 6 as a normal shift,
-  rather than taxing the whole shift as Sunday time or none of it. The
-  summary box's **Overtime Pay (hours)** = `O/T Minutes x 1.5 + S/T Minutes x 2.0`.
+  non-Sunday, paid at **1.5x**. **S/T Minutes** ("Sunday Time") is the full
+  **Hrs of work** attributed to a Sunday's row, paid at **2.0x**, and never
+  counts toward O/T Minutes. Since a night shift (clock-in at/after 18:30)
+  is always attributed to the day it's worked into, a Sunday-night shift is
+  entirely Monday's — it earns no S/T at all and is ordinary Monday time,
+  eligible for O/T like any other overrun. The summary box's **Overtime Pay
+  (hours)** = `O/T Minutes x 1.5 + S/T Minutes x 2.0`.
 
 ## How it works
 
