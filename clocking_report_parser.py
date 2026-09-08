@@ -123,17 +123,17 @@ CLUSTER_GAP_HOURS = 2.0
 MAX_SHIFT_HOURS = 20
 
 # A shift is a "night shift" if the *first* clocking of its entry cluster
-# (see build_hours_worked) is at/after this time - not the deeper work-point
-# entry time, since someone who clocks in early still swipes through the
-# same surface gates first. Set well below the observed ~18:00 night-shift
-# start (real data has people first clocking in as early as 17:39) rather
-# than right at it, since different people clock in at different times and a
-# threshold sitting close to the earliest real value would misclassify the
-# next early clocker. Still far enough from a normal day-shift start
-# (observed ~06:30) that the two can never be confused.
+# (see build_hours_worked) is in the PM - not the deeper work-point entry
+# time, since someone who clocks in early still swipes through the same
+# surface gates first. Noon is used rather than a time closer to the
+# observed ~17:39-18:18 night-shift starts, since different people clock in
+# at different times and a threshold sitting close to the earliest real
+# value would misclassify the next early clocker; noon can't, since a normal
+# day shift starts in the morning (observed ~06:30) and nobody's shift
+# legitimately starts right around midday.
 # Night shift hours are attributed to the day the shift ends on (the day
 # worked *into*), not the day clocked in on - see build_hours_worked().
-NIGHT_SHIFT_START = time(17, 0)
+NIGHT_SHIFT_START = time(12, 0)
 
 # x-coordinate boundaries used to classify each word into IN vs OUT columns,
 # and then into a specific field within that side. Adjust these if your PDF's
@@ -417,11 +417,11 @@ def build_hours_worked(df):
     threshold to tune.
 
     A shift is a night shift if the *first* clocking of its entry cluster is
-    at/after NIGHT_SHIFT_START (17:00) - not the moment they actually reach
-    the work point, since that lags behind whoever clocks in early by however
-    long their walk through the surface gates takes. Its hours are then
-    attributed to the day it ends on (the day worked *into*) rather than the
-    day clocked in on."""
+    in the PM (>= NIGHT_SHIFT_START, noon) - not the moment they actually
+    reach the work point, since that lags behind whoever clocks in early by
+    however long their walk through the surface gates takes. Its hours are
+    then attributed to the day it ends on (the day worked *into*) rather than
+    the day clocked in on."""
     d = df.sort_values("Datetime").reset_index(drop=True)
     cluster_starts, cluster_ends = _cluster_activity(d)
 
@@ -537,8 +537,8 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
       week.
 
     A scheduled day's "Shift" is "N/S" (night shift) if the first clocking of
-    its entry cluster is at/after NIGHT_SHIFT_START (17:00) and "D/S" (day
-    shift) otherwise.
+    its entry cluster is in the PM (>= NIGHT_SHIFT_START, noon) and "D/S"
+    (day shift) otherwise.
 
     Each row's hours come from `build_hours_worked()`'s IN/OUT shift pairing
     (see its docstring). A day-shift's hours are attributed to the calendar
@@ -557,11 +557,11 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     non-Sunday - e.g. staying past a planned 8h shift. S/T Minutes (2.0x,
     "Sunday Time") covers time worked on a Sunday: the full "Hrs of work"
     attributed to that Sunday's row, with no O/T earned there. A Sunday
-    *night* shift (entry cluster's first clocking >= 17:00) is entirely
+    *night* shift (entry cluster's first clocking in the PM) is entirely
     attributed to Monday's row (per the night-shift rule above), so it earns
     no S/T at all - it's ordinary Monday time, eligible for O/T like any
     other shift's overrun. Only a Sunday day-shift that happens to run past
-    midnight (started before 17:00) stays on Sunday's row and is taxed as
+    midnight (started before noon) stays on Sunday's row and is taxed as
     full Sunday S/T time.
     """
     if not rotating and work_days is None:
@@ -617,7 +617,7 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
         if hrs_of_work is None:
             ot_minutes = st_minutes = None
         elif is_sunday:
-            # A night shift (entry cluster's first clocking >= 17:00) is
+            # A night shift (entry cluster's first clocking in the PM) is
             # never attributed to a Sunday row - it belongs to Monday (see
             # build_hours_worked). So anything left on a Sunday row is either
             # an ordinary Sunday shift or a day-shift that happens to run
