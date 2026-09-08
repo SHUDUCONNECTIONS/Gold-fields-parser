@@ -53,15 +53,20 @@ HOURS WORKED METHODOLOGY
 --------------------------
 Rather than using each calendar day's first-to-last clocking (which breaks
 down for overnight shifts and for people working several nights in a row
-with short rest gaps), this script pairs each "Work" type clocking through
-Point "U01" (the underground workplace access point): the IN event marks
-entry to the workplace and the following OUT event marks exit. The
-difference between them is that shift's "hours worked". This deliberately
-excludes surface travel time through access gates (FCP/SG1/SG2/A01/A11/etc.)
-before and after the shift.
+with short rest gaps), this script pairs each underground workplace-access
+clocking: the IN event marks entry to the workplace and the following OUT
+event marks exit. The difference between them is that shift's "hours
+worked". This deliberately excludes surface travel time through access
+gates (FCP/SG1/SG2/A01/A11/etc.) before and after the shift.
 
-If your report uses a different "work area" point code, change WORK_POINT
-below.
+Different report templates use different point codes for this, and the IN
+and OUT side don't necessarily share the same code - e.g. one observed
+template both enters and exits through "U01", while another enters through
+"U06" and exits through "U02" (a "Twin" cage system). WORK_IN_POINTS /
+WORK_OUT_POINTS / WORK_TYPES below list every code recognised so far; add
+your report's codes there if hours come out as 0 or via the (less accurate)
+gap-based fallback - see build_hours_worked()'s docstring for how to check
+which method actually ran.
 """
 
 import argparse
@@ -86,12 +91,21 @@ from openpyxl.utils import get_column_letter
 # Config
 # ----------------------------------------------------------------------------
 
-# The point code that represents the actual underground workplace / work area.
-# Used to compute "Hours Worked" from IN/OUT pairs of Type == "Work".
-WORK_POINT = "U01"
+# Point codes (and the Type they're recognised under, matched case-
+# insensitively) that represent entering/leaving the actual underground
+# workplace / work area, used to compute "Hours Worked" from IN/OUT pairs -
+# see build_hours_worked(). Two report templates have been observed so far,
+# and their IN/OUT codes don't agree with each other, so both are listed:
+# "U01" both ways on the older template, "U06" in / "U02" out (a "Twin" cage
+# system) on a newer one. If hours come out as 0 for every day, or the
+# workbook's summary note mentions the (less accurate) gap-based fallback,
+# add your report's IN/OUT point codes and Type here.
+WORK_TYPES = {"work", "twin"}
+WORK_IN_POINTS = {"U01", "U06"}
+WORK_OUT_POINTS = {"U01", "U02"}
 
-# Gap threshold (hours) used only as a sanity fallback if no Work/U01 pairs
-# are found in the report (see build_hours_worked_fallback()).
+# Gap threshold (hours) used only as a sanity fallback if no work IN/OUT
+# pairs are found in the report (see build_hours_worked_fallback()).
 FALLBACK_SESSION_GAP_HOURS = 14
 
 # Maximum plausible length (hours) for a single IN->OUT shift. build_hours_worked
@@ -357,13 +371,22 @@ def build_daily_summary(df, date_from, date_to):
     return full_daily
 
 
-def build_hours_worked(df, work_point=WORK_POINT):
-    """Pair IN/OUT clockings of Type == 'Work' at `work_point` into shifts.
+def build_hours_worked(df, in_points=WORK_IN_POINTS, out_points=WORK_OUT_POINTS, types=WORK_TYPES):
+    """Pair underground workplace-access clockings (an IN at `in_points` and
+    the following OUT at `out_points`, both of Type in `types`, matched
+    case-insensitively) into shifts. Falls back to
+    build_hours_worked_fallback() - a cruder, gap-based method - if none of
+    the recognised work points/types are found at all, e.g. an unrecognised
+    report template (see WORK_IN_POINTS/WORK_OUT_POINTS/WORK_TYPES above).
 
     A shift whose clock-in time is at/after NIGHT_SHIFT_START (18:30) is a
     night shift, and its hours are attributed to the day it ends on (the day
     worked *into*) rather than the day clocked in on."""
-    work = df[(df["Type"] == "Work") & (df["Point"] == work_point)].reset_index(drop=True)
+    is_work_type = df["Type"].str.lower().isin(types)
+    is_work_point = ((df["Direction"] == "IN") & df["Point"].isin(in_points)) | (
+        (df["Direction"] == "OUT") & df["Point"].isin(out_points)
+    )
+    work = df[is_work_type & is_work_point].reset_index(drop=True)
 
     if work.empty:
         return build_hours_worked_fallback(df)
@@ -420,10 +443,13 @@ def build_hours_worked(df, work_point=WORK_POINT):
 
 
 def build_hours_worked_fallback(df, gap_hours=FALLBACK_SESSION_GAP_HOURS):
-    """Used only if no Work/`WORK_POINT` events exist in the report: clusters
-    ALL clockings into sessions separated by gaps > gap_hours. Less accurate
-    than the Work-point pairing (may merge consecutive shifts with short
-    rest gaps), so only used as a last resort."""
+    """Used only if none of WORK_IN_POINTS/WORK_OUT_POINTS/WORK_TYPES are
+    found in the report: clusters ALL clockings into sessions separated by
+    gaps > gap_hours. Less accurate than the work-point pairing (may merge
+    consecutive shifts whose rest gap is under gap_hours), so only used as a
+    last resort - every shift it produces carries a "Fallback" Note (surfaced
+    into the timesheet's Comments column by build_timesheet) so this is
+    visible rather than silently trusted."""
     gap = df["Datetime"].diff().dt.total_seconds() / 3600
     new_session = (gap > gap_hours) | gap.isna()
     df = df.copy()
@@ -448,7 +474,8 @@ def build_hours_worked_fallback(df, gap_hours=FALLBACK_SESSION_GAP_HOURS):
             "Hours Worked": sessions["Hours Worked"],
             "Is Night": is_night,
             "Note": "Fallback: clustered by gap > "
-            f"{gap_hours}h (no Work/{WORK_POINT} events found)",
+            f"{gap_hours}h (no recognised work-point clockings found - "
+            "may merge consecutive shifts with a short rest gap)",
         }
     )
 
