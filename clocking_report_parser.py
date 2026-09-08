@@ -94,6 +94,18 @@ WORK_POINT = "U01"
 # are found in the report (see build_hours_worked_fallback()).
 FALLBACK_SESSION_GAP_HOURS = 14
 
+# Maximum plausible length (hours) for a single IN->OUT shift. build_hours_worked
+# pairs Work/U01 clockings by simply walking the sorted list two at a time, so a
+# single mis-dated or dropped clocking anywhere in the report can desync that
+# pairing and match an IN with an OUT from a completely different, much later
+# shift - producing a multi-day "Hours Worked" figure that silently inflates
+# overtime pay while the displayed 1st/2nd times (time-of-day only, see
+# build_timesheet) still look like a normal shift. Any pair whose duration
+# falls outside [0, MAX_SHIFT_HOURS] is rejected rather than trusted, so a
+# desync shows up as two flagged "Unmatched" clockings for manual review
+# instead of a bogus number silently feeding into payroll.
+MAX_SHIFT_HOURS = 20
+
 # A shift is a "night shift" if its clock-in time is at/after this time.
 # Night shift hours are attributed to the day the shift ends on (the day
 # worked *into*), not the day clocked in on - see build_hours_worked().
@@ -360,9 +372,11 @@ def build_hours_worked(df, work_point=WORK_POINT):
     i = 0
     while i < len(work):
         a = work.iloc[i]
-        if a["Direction"] == "IN" and i + 1 < len(work) and work.iloc[i + 1]["Direction"] == "OUT":
-            b = work.iloc[i + 1]
-            dur_h = (b["Datetime"] - a["Datetime"]).total_seconds() / 3600
+        b = work.iloc[i + 1] if i + 1 < len(work) else None
+        dur_h = (b["Datetime"] - a["Datetime"]).total_seconds() / 3600 if b is not None else None
+        plausible = dur_h is not None and 0 <= dur_h <= MAX_SHIFT_HOURS
+
+        if a["Direction"] == "IN" and b is not None and b["Direction"] == "OUT" and plausible:
             is_night = a["Datetime"].time() >= NIGHT_SHIFT_START
             shifts.append(
                 {
@@ -380,6 +394,13 @@ def build_hours_worked(df, work_point=WORK_POINT):
             i += 2
         else:
             is_night = a["Direction"] == "IN" and a["Datetime"].time() >= NIGHT_SHIFT_START
+            if a["Direction"] == "IN" and b is not None and b["Direction"] == "OUT":
+                note = (
+                    f"Clock-out {dur_h:.1f}h later ignored as implausible "
+                    "(mis-dated clocking? needs manual review)"
+                )
+            else:
+                note = "Unmatched clocking - could not pair"
             shifts.append(
                 {
                     "Shift Date": a["Date"],
@@ -390,7 +411,7 @@ def build_hours_worked(df, work_point=WORK_POINT):
                     "Clock Out Datetime": a["Datetime"] if a["Direction"] == "OUT" else pd.NaT,
                     "Hours Worked": 0,
                     "Is Night": is_night,
-                    "Note": "Unmatched clocking - could not pair",
+                    "Note": note,
                 }
             )
             i += 1
@@ -555,6 +576,14 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
             comment = "No clocking recorded"
         elif not is_scheduled and first_dt is not None:
             comment = "Worked on OFF day"
+
+        # Surface build_hours_worked()'s per-shift anomaly notes (e.g. a
+        # rejected implausible-duration pairing, see MAX_SHIFT_HOURS) so a
+        # day silently showing 0:00 hours still gets flagged for review
+        # instead of looking like a clean day off / short day.
+        shift_notes = sorted({s["Note"] for s in day_shifts if s.get("Note")})
+        if shift_notes:
+            comment = "; ".join([comment] + shift_notes) if comment else "; ".join(shift_notes)
 
         is_sunday = cur.weekday() == WEEKDAY_ABBR["sun"]
         planned = timedelta(hours=hours_per_day) if is_scheduled else None
