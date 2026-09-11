@@ -144,17 +144,17 @@ table with totals and a Planned/Actual/Overtime summary box.
   - **Desktop app**: day checkboxes + an hours field above the Parse button
   - **Web app (local + Vercel)**: pick a planned shift length up front
     (10h/9h/8h tiles). The 10h tile is treated as a rotating 4-on/4-off
-    shift; 9h and 8h follow a Mon–Fri / Mon–Sat toggle (for employees
-    scheduled to work Saturdays). Sunday work always counts as overtime
-    either way
-- **O/T Minutes** is any time worked beyond the planned daily hours on a
-  non-Sunday, paid at **1.5x**. **S/T Minutes** ("Sunday Time") is the full
-  **Hrs of work** attributed to a Sunday's row, paid at **2.0x**, and never
-  counts toward O/T Minutes. Since a night shift (clock-in at/after 18:30)
-  is always attributed to the day it's worked into, a Sunday-night shift is
-  entirely Monday's — it earns no S/T at all and is ordinary Monday time,
-  eligible for O/T like any other overrun. The summary box's **Overtime Pay
-  (hours)** = `O/T Minutes x 1.5 + S/T Minutes x 2.0`.
+    shift (which can land on any day, Sunday included); 9h and 8h follow a
+    Mon–Fri / Mon–Sat toggle (for employees scheduled to work Saturdays)
+- **O/T Minutes** is any time worked beyond the planned daily hours, paid at
+  **1.5x** — Sunday included, since people are sometimes genuinely scheduled
+  to work Sundays and the parser has no roster to tell a scheduled Sunday
+  from an unscheduled one. **S/T Minutes** ("Sunday Time", 2.0x) is never
+  filled in automatically — the column is left blank for whoever's running
+  the parser to fill in by hand in the generated Excel if a particular
+  Sunday should be paid at the higher rate. The summary box's **Overtime Pay
+  (hours)** = `O/T Minutes x 1.5 + S/T Minutes x 2.0`, recalculated live from
+  the sheet, so editing S/T Minutes updates it automatically.
 
 ## How it works
 

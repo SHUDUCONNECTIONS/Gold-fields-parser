@@ -9,8 +9,13 @@ import type { Job } from "./types";
 import { useInstallPrompt } from "./useInstallPrompt";
 
 // The working week is Mon-Fri, optionally extended to include Saturday for
-// employees who are scheduled to work it (Sunday is never part of this -
-// Sunday work always goes to S/T regardless of schedule, see the parser).
+// employees who are scheduled to work it (Sunday isn't offered here since
+// this fixed weekly pattern has no rostered Sunday, but the rotating (10h)
+// schedule can land its normal on-days on one). Either way, Sunday work
+// always lands as ordinary hours from the parser - it never auto-computes
+// S/T ("Sunday Time", 2x pay); that's left for whoever's running the parser
+// to fill in by hand in the generated Excel if it should be paid at the
+// higher rate. See build_timesheet in the parser.
 const BASE_WORK_DAYS = ["mon", "tue", "wed", "thu", "fri"];
 
 function makeId() {

@@ -553,16 +553,15 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
     shifts' paired durations (not simply 2nd - 1st, which would overcount if
     a day has more than one shift).
 
-    O/T Minutes (1.5x) is any time worked beyond `hours_per_day` on a
-    non-Sunday - e.g. staying past a planned 8h shift. S/T Minutes (2.0x,
-    "Sunday Time") covers time worked on a Sunday: the full "Hrs of work"
-    attributed to that Sunday's row, with no O/T earned there. A Sunday
-    *night* shift (entry cluster's first clocking in the PM) is entirely
-    attributed to Monday's row (per the night-shift rule above), so it earns
-    no S/T at all - it's ordinary Monday time, eligible for O/T like any
-    other shift's overrun. Only a Sunday day-shift that happens to run past
-    midnight (started before noon) stays on Sunday's row and is taxed as
-    full Sunday S/T time.
+    O/T Minutes (1.5x) is any time worked beyond `hours_per_day`, on any day
+    including Sunday - e.g. staying past a planned 8h shift. Sunday is never
+    auto-taxed as S/T: people are sometimes genuinely scheduled to work
+    Sundays, and even an unscheduled Sunday shift lands as ordinary hours
+    (O/T only for the excess) here, so it always reads as normal working
+    time. S/T Minutes (2.0x, "Sunday Time") is left for whoever's using the
+    parser to fill in by hand in the generated Excel, if they decide that
+    particular Sunday should be paid at the higher rate - the parser itself
+    never populates it.
     """
     if not rotating and work_days is None:
         work_days = DEFAULT_WORK_DAYS
@@ -611,24 +610,19 @@ def build_timesheet(df, meta, work_days=None, hours_per_day=DEFAULT_HOURS_PER_DA
         if shift_notes:
             comment = "; ".join([comment] + shift_notes) if comment else "; ".join(shift_notes)
 
-        is_sunday = cur.weekday() == WEEKDAY_ABBR["sun"]
         planned = timedelta(hours=hours_per_day) if is_scheduled else None
 
+        # Sunday is never auto-taxed as S/T - it always lands as ordinary
+        # working hours (O/T only for time past `planned`), same as any
+        # other day. Whoever's using the parser can manually fill in S/T
+        # Minutes in the generated Excel if a particular Sunday should be
+        # paid at the higher rate.
         if hrs_of_work is None:
-            ot_minutes = st_minutes = None
-        elif is_sunday:
-            # A night shift (entry cluster's first clocking in the PM) is
-            # never attributed to a Sunday row - it belongs to Monday (see
-            # build_hours_worked). So anything left on a Sunday row is either
-            # an ordinary Sunday shift or a day-shift that happens to run
-            # past midnight; either way it's taxed as full Sunday S/T time,
-            # with no O/T.
-            st_minutes = hrs_of_work if hrs_of_work > timedelta() else None
             ot_minutes = None
         else:
             excess = hrs_of_work - (planned or timedelta())
             ot_minutes = excess if excess > timedelta() else None
-            st_minutes = None
+        st_minutes = None
 
         if not is_scheduled:
             shift_label = "OFF"
@@ -850,7 +844,9 @@ def write_timesheet_sheet(
         row=note_row, column=1,
         value=(
             "Note: Overtime Hours = O/T Minutes (time worked beyond the planned daily "
-            "hours) + S/T Minutes (all time worked on a Sunday). Overtime Pay (hours) = "
+            "hours, Sunday included) + S/T Minutes (Sunday pay at the higher rate - not "
+            "auto-calculated; fill this column in by hand if a Sunday should be paid at "
+            "2x). Overtime Pay (hours) = "
             f"O/T Minutes x {OT_RATE:g} + S/T Minutes x {ST_RATE:g}. " + schedule_note
         ),
     )
